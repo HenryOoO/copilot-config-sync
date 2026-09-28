@@ -299,6 +299,7 @@ export class SyncPanel {
     background: var(--vscode-charts-green);
     display: inline-block;
   }
+  .dirty-dot.hidden { display: none; }
 
   /* ── detail modal ── */
   .modal-mask {
@@ -307,6 +308,7 @@ export class SyncPanel {
     display: grid; place-items: center;
     z-index: 100;
   }
+  .modal-mask.hidden { display: none; }
   .modal {
     width: 240px; max-height: 320px;
     background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
