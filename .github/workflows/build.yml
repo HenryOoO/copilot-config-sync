@@ -28,6 +28,9 @@ jobs:
       - name: Run tests
         run: node --test out/test/crypto.test.js out/test/scanner.test.js
 
+      - name: Bump version to 0.1.${{ github.run_number }}
+        run: npm version 0.1.${{ github.run_number }} --no-git-tag-version
+
       - name: Package VSIX
         run: npx @vscode/vsce package --allow-missing-repository --skip-license --out copilot-config-sync-0.1.${{ github.run_number }}.vsix
 

@@ -10,6 +10,8 @@ export interface PanelState {
   counts: Record<string, number>;
   enabled: Record<string, boolean>;
   history: Array<{ category: string; files: number; direction: 'up' | 'down'; at: string; detail?: Record<string, number> }>;
+  version?: string;
+  update?: { latest: string; command: string };
 }
 
 export class SyncPanel {
@@ -23,7 +25,8 @@ export class SyncPanel {
     private readonly onPull: () => Promise<void>,
     private readonly onToggleCategory: (category: string, enabled: boolean) => Promise<void>,
     private readonly onSetup: (mode: 'create' | 'connect', gistName: string, gistId: string, passphrase: string) => Promise<void>,
-    private readonly onSaveSettings: (settings: { gistName: string; gistId: string; deviceName: string; passphrase?: string }) => Promise<void>
+    private readonly onSaveSettings: (settings: { gistName: string; gistId: string; deviceName: string; passphrase?: string }) => Promise<void>,
+    private readonly onCheckUpdate: () => Promise<void>
   ) {
     this.state = {
       status: 'idle',
@@ -56,6 +59,9 @@ export class SyncPanel {
           break;
         case 'saveSettings':
           await this.onSaveSettings(msg.settings);
+          break;
+        case 'checkUpdate':
+          await this.onCheckUpdate();
           break;
         case 'ready':
           this.postState();
@@ -112,6 +118,18 @@ export class SyncPanel {
   .dot.warn { background: var(--vscode-charts-orange); }
   .dot.off { background: var(--vscode-charts-gray, #888); }
   @keyframes blink { 50% { opacity: 0.35; } }
+
+  /* ── update banner ── */
+  .update-banner {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 11px; margin: 0 0 12px 30px;
+    border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.3));
+    border-radius: 8px;
+    font-size: 11.5px;
+  }
+  .update-banner .ver { color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+  .update-banner button { padding: 3px 10px; font-size: 11px; flex: none; }
+  .update-banner .copy-ok { color: var(--vscode-charts-green); font-size: 11px; }
 
   /* ── signature: sync pulse ── */
   .pulse {
@@ -352,6 +370,11 @@ export class SyncPanel {
     <h1>Copilot Config Sync</h1>
   </div>
   <div class="statusline"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
+  <div class="update-banner hidden" id="updateBanner">
+    <span>新版本 <span class="ver" id="updateVer"></span></span>
+    <button class="secondary" id="updateCopy">复制更新命令</button>
+    <span class="copy-ok hidden" id="copyOk">已复制</span>
+  </div>
 
   <!-- setup: shown when not connected -->
   <div class="setup" id="setup">
@@ -447,8 +470,11 @@ export class SyncPanel {
         <div class="sub">加密敏感字段。更换口令后，其他机器需用新口令才能解密。</div>
       </div>
       <div class="error" id="settingsError"></div>
-      <div class="actions" style="margin-bottom:0">
+      <div class="actions" style="margin-bottom:8px">
         <button class="primary" id="settingsSave">保存设置</button>
+      </div>
+      <div class="actions" style="margin-bottom:0">
+        <button class="secondary" id="checkUpdateBtn" style="flex:1">检查更新</button>
       </div>
     </div>
   </div>
@@ -537,6 +563,15 @@ export class SyncPanel {
     }
     renderCats();
     if (managing) { /* keep edit mode visuals */ }
+
+    // update banner: show only when a newer version exists
+    const banner = $('updateBanner');
+    if (state.update && state.version && state.update.latest !== state.version) {
+      $('updateVer').textContent = state.update.latest;
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+    }
 
     // settings inputs: refill only when not mid-edit (no unsaved changes)
     if (!isDirty()) {
@@ -701,6 +736,18 @@ export class SyncPanel {
   $('syncBtn').addEventListener('click', () => vscode.postMessage({ type: 'syncNow' }));
   $('pushBtn').addEventListener('click', () => vscode.postMessage({ type: 'push' }));
   $('pullBtn').addEventListener('click', () => vscode.postMessage({ type: 'pull' }));
+  $('checkUpdateBtn').addEventListener('click', () => {
+    $('checkUpdateBtn').textContent = '检查中…';
+    $('checkUpdateBtn').disabled = true;
+    vscode.postMessage({ type: 'checkUpdate' });
+  });
+  $('updateCopy').addEventListener('click', () => {
+    if (!current.update) return;
+    navigator.clipboard.writeText(current.update.command).then(() => {
+      $('copyOk').classList.remove('hidden');
+      setTimeout(() => $('copyOk').classList.add('hidden'), 2000);
+    });
+  });
 
   window.addEventListener('message', (e) => {
     if (e.data.type === 'state') render(e.data.state);

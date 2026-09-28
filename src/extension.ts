@@ -9,6 +9,9 @@ const CONFIG_SECTION = 'copilotConfigSync';
 
 const ALL_CATEGORIES: CategoryId[] = ['skills', 'instructions', 'agents', 'hooks', 'prompts', 'mcp', 'lmProviders'];
 
+const RELEASE_URL = 'https://github.com/HenryOoO/copilot-config-sync/releases/download/latest';
+const UPDATE_COMMAND = 'curl -L -o /tmp/ccs.vsix https://github.com/HenryOoO/copilot-config-sync/releases/download/latest/copilot-config-sync-latest.vsix && "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension /tmp/ccs.vsix';
+
 function getEnabledCategories(): Record<CategoryId, boolean> {
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const raw = config.get<Record<string, boolean>>('categories', {});
@@ -55,7 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await runOp(panel, '推送中…', async () => {
           const r = await engine.push();
           recordHistory(panel, 'push', r.files);
-          await refreshPanel(engine, panel, backend);
+          await refreshPanel(engine, panel, backend, context);
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -69,7 +72,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await runOp(panel, '拉取中…', async () => {
           const r = await engine.pull();
           recordHistory(panel, 'pull', r.files);
-          await refreshPanel(engine, panel, backend);
+          await refreshPanel(engine, panel, backend, context);
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -92,7 +95,7 @@ export function activate(context: vscode.ExtensionContext): void {
           await backend.connectGist(gistId);
         }
         await backend.setPassphrase(passphrase);
-        await refreshPanel(engine, panel, backend);
+        await refreshPanel(engine, panel, backend, context);
         vscode.window.showInformationMessage('Copilot Config Sync: 已连接，可以开始同步了');
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -115,11 +118,28 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         // if gistId changed, reconnect
         await backend.setGistId(settings.gistId || undefined);
-        await refreshPanel(engine, panel, backend);
+        await refreshPanel(engine, panel, backend, context);
         vscode.window.showInformationMessage('Copilot Config Sync: 设置已保存');
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
+      }
+    },
+    async () => {
+      try {
+        const latest = await fetchLatestVersion();
+        const current = context.extension.packageJSON.version as string;
+        panel.setState({
+          version: current,
+          update: latest ? { latest, command: UPDATE_COMMAND } : undefined,
+        });
+        if (!latest) {
+          vscode.window.showInformationMessage('Copilot Config Sync: 无法获取最新版本信息');
+        } else if (latest === current) {
+          vscode.window.showInformationMessage(`Copilot Config Sync: 已是最新版本 (${current})`);
+        }
+      } catch {
+        vscode.window.showInformationMessage('Copilot Config Sync: 无法获取最新版本信息');
       }
     }
   );
@@ -132,7 +152,7 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  void refreshPanel(engine, panel, backend);
+  void refreshPanel(engine, panel, backend, context);
 }
 
 async function runSync(engine: SyncEngine, panel: SyncPanel): Promise<string> {
@@ -220,7 +240,7 @@ async function runOp(panel: SyncPanel, title: string, fn: () => Promise<unknown>
   }
 }
 
-async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistBackend): Promise<void> {
+async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistBackend, context: vscode.ExtensionContext): Promise<void> {
   const manifest = scanManifest(defaultSources(), engine['opts'].deviceName);
   const counts: Record<string, number> = {};
   for (const [cat, data] of Object.entries(manifest.categories)) {
@@ -241,8 +261,16 @@ async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistB
     deviceName: engine['opts'].deviceName,
     hasPassphrase: Boolean(await engine['opts'].secretStorage.get('copilotConfigSync.passphrase')),
     status: gistId ? 'ok' : 'not-setup',
+    version: context.extension.packageJSON.version as string,
   };
   panel.setState(state);
 }
 
 export function deactivate(): void {}
+
+/** Fetch the latest published VSIX version from the GitHub release redirect. */
+async function fetchLatestVersion(): Promise<string | undefined> {
+  const res = await fetch(`${RELEASE_URL}/copilot-config-sync-latest.vsix`, { method: 'HEAD', redirect: 'follow' });
+  const match = /copilot-config-sync-(\d+\.\d+\.\d+)\.vsix/.exec(res.url);
+  return match ? match[1] : undefined;
+}
