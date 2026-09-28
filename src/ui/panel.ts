@@ -13,8 +13,12 @@ export interface PanelState {
   version?: string;
   update?: { latest: string; command: string };
   checkingUpdate?: boolean;
+  /** true while a confirmed update is downloading/installing. */
+  updating?: boolean;
   /** true after at least one update check in this session. */
   updateChecked?: boolean;
+  /** When set, the panel shows an "install update?" confirmation modal. */
+  confirmUpdateFor?: string;
   /** Transient in-panel toast; replaces native bottom-right messages. */
   toast?: { text: string; kind: 'info' | 'error'; seq: number };
 }
@@ -29,7 +33,8 @@ export class SyncPanel {
     private readonly onToggleCategory: (category: string, enabled: boolean) => Promise<void>,
     private readonly onSetup: (mode: 'create' | 'connect', gistName: string, gistId: string, passphrase: string) => Promise<void>,
     private readonly onSaveSettings: (settings: { gistName: string; gistId: string; deviceName: string; passphrase?: string }) => Promise<void>,
-    private readonly onCheckUpdate: () => Promise<void>
+    private readonly onCheckUpdate: () => Promise<void>,
+    private readonly onInstallUpdate: () => Promise<void>
   ) {
     this.state = {
       status: 'idle',
@@ -61,6 +66,9 @@ export class SyncPanel {
           this.setState({ checkingUpdate: true });
           this.onCheckUpdate();
           break;
+        case 'installUpdate':
+          this.onInstallUpdate();
+          break;
         case 'ready':
           this.postState();
           break;
@@ -76,6 +84,11 @@ export class SyncPanel {
   /** Show a transient toast inside the panel instead of a native message. */
   toast(text: string, kind: 'info' | 'error' = 'info'): void {
     this.setState({ toast: { text, kind, seq: (this.state.toast?.seq || 0) + 1 } });
+  }
+
+  /** Ask the user to confirm installing the pending update (in-panel modal). */
+  confirmUpdate(latest: string): void {
+    this.setState({ confirmUpdateFor: latest });
   }
 
   private postState(): void {
@@ -387,6 +400,13 @@ export class SyncPanel {
     color: var(--vscode-button-secondaryForeground);
     align-self: flex-end;
   }
+  .modal .btn-row { display: flex; gap: 8px; margin-top: 10px; }
+  .modal .btn-row button { flex: 1; }
+  .modal .btn-row .primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .modal .btn-row .secondary {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+  }
 </style>
 </head>
 <body>
@@ -456,6 +476,17 @@ export class SyncPanel {
         <div class="sub" id="modalSub"></div>
         <div class="rows" id="modalRows"></div>
         <button class="close" id="modalClose">关闭</button>
+      </div>
+    </div>
+
+    <div class="modal-mask hidden" id="updateMask">
+      <div class="modal" role="alertdialog" aria-modal="true">
+        <h2>发现新版本</h2>
+        <div class="sub" id="updateMsg"></div>
+        <div class="btn-row">
+          <button class="secondary" id="updateLater">以后再说</button>
+          <button class="primary" id="updateInstall">立即更新</button>
+        </div>
       </div>
     </div>
 
@@ -553,7 +584,6 @@ export class SyncPanel {
 
   let toastTimer = null;
   let lastToastSeq = 0;
-  let autoCopiedFor = null;
   function showToast(text, kind) {
     const el = $('toast');
     clearTimeout(toastTimer);
@@ -600,20 +630,18 @@ export class SyncPanel {
 
     // version button doubles as the check-update trigger
     const verBtn = $('verBtn');
-    const checking = state.checkingUpdate === true;
+    const checking = state.checkingUpdate === true || state.updating === true;
     verBtn.disabled = checking;
-    verBtn.textContent = checking ? '检查中…' : 'v' + (state.version || '?');
+    verBtn.textContent = state.updating ? '更新中…' : checking ? '检查中…' : 'v' + (state.version || '?');
 
-    // newer version found: copy install command automatically (once per version)
-    if (state.update && state.version && state.update.latest !== state.version) {
-      if (autoCopiedFor !== state.update.latest) {
-        autoCopiedFor = state.update.latest;
-        navigator.clipboard.writeText(state.update.command).then(() => {
-          showToast('发现新版本 ' + state.update.latest + '，更新命令已复制到剪贴板', 'info');
-        });
-      }
-    } else if (state.updateChecked) {
-      showToast('已是最新版本 ' + (state.version || ''), 'info');
+    // update confirmation modal
+    const updateMask = $('updateMask');
+    if (state.confirmUpdateFor) {
+      $('updateMsg').textContent =
+        '新版本 v' + state.confirmUpdateFor + ' 可用，是否自动下载并安装？安装后需重载窗口生效。';
+      updateMask.classList.remove('hidden');
+    } else {
+      updateMask.classList.add('hidden');
     }
 
     // settings inputs: refill only when not mid-edit (no unsaved changes)
@@ -803,6 +831,20 @@ export class SyncPanel {
   $('verBtn').addEventListener('click', () => {
     if (current && current.checkingUpdate) return;
     vscode.postMessage({ type: 'checkUpdate' });
+  });
+  $('updateInstall').addEventListener('click', () => {
+    $('updateMask').classList.add('hidden');
+    vscode.postMessage({ type: 'installUpdate' });
+  });
+  $('updateLater').addEventListener('click', () => {
+    $('updateMask').classList.add('hidden');
+    if (current) current.confirmUpdateFor = null;
+  });
+  $('updateMask').addEventListener('click', (e) => {
+    if (e.target === $('updateMask')) {
+      $('updateMask').classList.add('hidden');
+      if (current) current.confirmUpdateFor = null;
+    }
   });
 
   window.addEventListener('message', (e) => {

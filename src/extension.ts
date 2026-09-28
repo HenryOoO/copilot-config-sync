@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { SyncEngine } from './core/engine';
 import { GistBackend } from './storage/gist';
 import { CategoryId } from './core/types';
@@ -13,6 +14,38 @@ const RELEASE_API_URL = 'https://api.github.com/repos/HenryOoO/copilot-config-sy
 
 function installCommand(url: string): string {
   return `curl -L -o /tmp/ccs.vsix ${url} && "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension /tmp/ccs.vsix`;
+}
+
+function codeCli(): string {
+  return process.platform === 'darwin'
+    ? '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
+    : 'code';
+}
+
+/** Download the vsix and install it via the code CLI; resolves true on success. */
+async function installVsix(url: string): Promise<boolean> {
+  const tmp = '/tmp/copilot-config-sync-update.vsix';
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+    if (!res.ok) {
+      return false;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    await fs.promises.writeFile(tmp, buf);
+    const { execFile } = require('child_process') as typeof import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile(codeCli(), ['--install-extension', tmp, '--force'], (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(String(stderr || stdout || err)));
+        } else {
+          resolve();
+        }
+      });
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function getEnabledCategories(): Record<CategoryId, boolean> {
@@ -115,11 +148,33 @@ export function activate(context: vscode.ExtensionContext): void {
         } else if (latest.version === current) {
           panel.toast(`已是最新版本 (${current})`);
         } else {
-          panel.toast(`发现新版本 ${latest.version}，更新命令已复制到剪贴板`);
+          panel.confirmUpdate(latest.version);
         }
       } catch {
         panel.setState({ checkingUpdate: false, updateChecked: true });
         panel.toast('无法获取最新版本信息', 'error');
+      }
+    },
+    async () => {
+      const update = panel['state'].update;
+      if (!update) {
+        return;
+      }
+      panel.setState({ updating: true });
+      const ok = await installVsix(update.command.match(/https:\S+\.vsix/)?.[0] || '');
+      panel.setState({ updating: false });
+      if (ok) {
+        panel.toast(`已安装 ${update.latest}，重载窗口后生效`);
+        const choice = await vscode.window.showInformationMessage(
+          `Copilot Config Sync: 已安装 ${update.latest}，重载窗口后生效`,
+          '立即重载'
+        );
+        if (choice === '立即重载') {
+          await vscode.commands.executeCommand('workbench.action.reloadWindow');
+        }
+      } else {
+        panel.toast('自动更新失败，安装命令已复制到剪贴板，可在终端手动执行', 'error');
+        await vscode.env.clipboard.writeText(update.command);
       }
     }
   );
@@ -154,7 +209,7 @@ async function autoCheckUpdate(context: vscode.ExtensionContext, panel: SyncPane
       updateChecked: true,
     });
     if (latest && latest.version !== current) {
-      panel.toast(`发现新版本 ${latest.version}，更新命令已复制到剪贴板`);
+      panel.confirmUpdate(latest.version);
     }
   } catch {
     // silent: auto check should not bother the user on failure
