@@ -263,7 +263,21 @@ async function fetchLatestVersion(): Promise<{ version: string; url: string } | 
   if (versioned.length === 0) {
     return undefined;
   }
-  const newest = versioned.sort((a, b) => b.name.localeCompare(a.name))[0];
+  // numeric-aware sort: 0.1.10 must beat 0.1.9 (plain string compare fails here)
+  const verOf = (name: string): [number, number, number] => {
+    const m = /(\d+)\.(\d+)\.(\d+)/.exec(name)!;
+    return [Number(m[1]), Number(m[2]), Number(m[3])];
+  };
+  const newest = versioned.sort((a, b) => {
+    const va = verOf(a.name);
+    const vb = verOf(b.name);
+    for (let i = 0; i < 3; i++) {
+      if (va[i] !== vb[i]) {
+        return vb[i] - va[i];
+      }
+    }
+    return 0;
+  })[0];
   const version = /(\d+\.\d+\.\d+)/.exec(newest.name)![1];
   return { version, url: newest.url };
 }
