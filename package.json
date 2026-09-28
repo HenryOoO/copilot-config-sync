@@ -1,0 +1,109 @@
+{
+  "name": "copilot-config-sync",
+  "displayName": "Copilot Config Sync",
+  "description": "Sync VS Code AI agent configs (skills, instructions, agents, hooks, prompts, MCP) across machines via a private GitHub Gist.",
+  "version": "0.1.0",
+  "publisher": "henry",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:copilotConfigSync.syncNow",
+    "onCommand:copilotConfigSync.push",
+    "onCommand:copilotConfigSync.pull",
+    "onCommand:copilotConfigSync.showStatus",
+    "onCommand:copilotConfigSync.resetSync",
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+  "viewsContainers": {
+    "activitybar": [
+      {
+        "id": "copilotConfigSync",
+        "title": "Copilot Config Sync",
+        "icon": "media/sync-icon.svg"
+      }
+    ]
+  },
+  "views": {
+    "copilotConfigSync": [
+      {
+        "type": "webview",
+        "id": "copilotConfigSync.panel",
+        "name": "Sync"
+      }
+    ]
+  },
+  "commands": [
+      {
+        "command": "copilotConfigSync.syncNow",
+        "title": "Copilot Sync: Sync Now",
+        "category": "Copilot Config Sync"
+      },
+      {
+        "command": "copilotConfigSync.push",
+        "title": "Copilot Sync: Push to Cloud",
+        "category": "Copilot Config Sync"
+      },
+      {
+        "command": "copilotConfigSync.pull",
+        "title": "Copilot Sync: Pull from Cloud",
+        "category": "Copilot Config Sync"
+      },
+      {
+        "command": "copilotConfigSync.showStatus",
+        "title": "Copilot Sync: Show Status",
+        "category": "Copilot Config Sync"
+      },
+      {
+        "command": "copilotConfigSync.resetSync",
+        "title": "Copilot Sync: Reset Sync (delete remote bundle)",
+        "category": "Copilot Config Sync"
+      }
+    ],
+    "configuration": {
+      "title": "Copilot Config Sync",
+      "properties": {
+        "copilotConfigSync.categories": {
+          "type": "object",
+          "default": {
+            "skills": true,
+            "instructions": true,
+            "agents": true,
+            "hooks": true,
+            "prompts": true,
+            "mcp": true,
+            "lmProviders": true
+          },
+          "description": "Which config categories to sync."
+        },
+        "copilotConfigSync.gistDescription": {
+          "type": "string",
+          "default": "copilot-config-sync",
+          "description": "Description used to find/create the sync gist."
+        },
+        "copilotConfigSync.deviceName": {
+          "type": "string",
+          "default": "",
+          "description": "Device name recorded in the manifest. Defaults to os.hostname()."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node --test out/test/**/*.test.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.6.0"
+  }
+}
