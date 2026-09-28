@@ -28,7 +28,7 @@ jobs:
       - name: Run tests
         run: npm test
         env:
-          NODE_PATH: out/test-mock
+          NODE_PATH: test-mock
 
       - name: Bump version to 0.1.${{ github.run_number }}
         run: npm version 0.1.${{ github.run_number }} --no-git-tag-version

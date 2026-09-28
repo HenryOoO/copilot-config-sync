@@ -70,7 +70,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "NODE_PATH=out/test-mock node --test out/test/crypto.test.js out/test/scanner.test.js out/test/engine.test.js",
+    "test": "NODE_PATH=test-mock node --test out/test/crypto.test.js out/test/scanner.test.js out/test/engine.test.js",
     "package": "vsce package"
   },
   "devDependencies": {
