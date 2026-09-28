@@ -107,11 +107,6 @@ export class SyncPanel {
     font-size: 11.5px; color: var(--vscode-descriptionForeground);
     margin: 2px 0 12px;
   }
-  .statusline .ver {
-    margin-left: auto;
-    font-variant-numeric: tabular-nums;
-    opacity: 0.75;
-  }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
   .dot.syncing { background: var(--vscode-charts-yellow); animation: blink 1s infinite; }
   .dot.warn { background: var(--vscode-charts-orange); }
@@ -138,6 +133,10 @@ export class SyncPanel {
     flex: 1; position: relative;
     display: flex; flex-direction: column; align-items: center;
   }
+  .label-row {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 3px;
+  }
   .track-label {
     font-size: 9.5px; font-weight: 600; letter-spacing: 0.5px;
     color: var(--vscode-sideBar-foreground);
@@ -145,10 +144,20 @@ export class SyncPanel {
     padding: 0 6px;
     white-space: nowrap;
     line-height: 1.4;
-    margin-bottom: 3px;
   }
   .pulse.ok .track-label { color: var(--vscode-charts-green); }
   .pulse.off .track-label { color: var(--vscode-charts-gray, #888); }
+  .ver-btn {
+    background: none; border: none; cursor: pointer;
+    font-family: var(--vscode-font-family);
+    font-size: 9.5px; font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-descriptionForeground);
+    padding: 0 2px; line-height: 1.4;
+    white-space: nowrap;
+  }
+  .ver-btn:hover { color: var(--vscode-sideBar-foreground); text-decoration: underline; filter: none; }
+  .ver-btn:disabled { cursor: default; text-decoration: none; opacity: 0.6; }
   .track {
     width: 100%; height: 3px; border-radius: 2px;
     background: var(--vscode-editorWidget-border, rgba(128,128,128,0.3));
@@ -377,7 +386,7 @@ export class SyncPanel {
 </style>
 </head>
 <body>
-  <div class="statusline"><span class="dot" id="dot"></span><span id="statusText">…</span><span class="ver" id="verText"></span></div>
+  <div class="statusline"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
   <div class="toast hidden" id="toast"></div>
 
   <!-- setup: shown when not connected -->
@@ -415,7 +424,7 @@ export class SyncPanel {
   <div id="main" class="hidden">
     <div class="pulse" id="pulse">
       <div class="endpoint"><span class="codicon-ish">⌂</span>本机</div>
-      <div class="track-wrap"><span class="track-label" id="trackLabel"></span><div class="track"><div class="flow"></div></div></div>
+      <div class="track-wrap"><div class="label-row"><span class="track-label" id="trackLabel"></span><button class="ver-btn" id="verBtn" title="点击检查更新"></button></div><div class="track"><div class="flow"></div></div></div>
       <div class="endpoint"><span class="codicon-ish">☁</span>云端</div>
     </div>
 
@@ -477,9 +486,6 @@ export class SyncPanel {
         <div class="sub">加密敏感字段。更换口令后，其他机器需用新口令才能解密。</div>
       </div>
       <div class="error" id="settingsError"></div>
-      <div class="actions" style="margin-bottom:0">
-        <button class="secondary" id="checkUpdateBtn" style="flex:1">检查更新</button>
-      </div>
     </div>
   </div>
 
@@ -568,7 +574,6 @@ export class SyncPanel {
     if (!connected) {
       $('statusText').textContent = '未设置 — 填写下方信息开始';
       $('dot').className = 'dot off';
-      $('verText').textContent = state.version ? 'v' + state.version : '';
       return;
     }
 
@@ -588,11 +593,11 @@ export class SyncPanel {
     renderCats();
     if (managing) { /* keep edit mode visuals */ }
 
-    // check-update button: state-driven so it always resets after a check
-    const checkBtn = $('checkUpdateBtn');
+    // version button doubles as the check-update trigger
+    const verBtn = $('verBtn');
     const checking = state.checkingUpdate === true;
-    checkBtn.disabled = checking;
-    checkBtn.textContent = checking ? '检查中…' : '检查更新';
+    verBtn.disabled = checking;
+    verBtn.textContent = checking ? '检查中…' : 'v' + (state.version || '?');
 
     // newer version found: copy install command automatically (once per version)
     if (state.update && state.version && state.update.latest !== state.version) {
@@ -790,7 +795,7 @@ export class SyncPanel {
   });
   $('manageCancel').addEventListener('click', () => setManaging(false));
   $('syncBtn').addEventListener('click', () => vscode.postMessage({ type: 'syncNow' }));
-  $('checkUpdateBtn').addEventListener('click', () => {
+  $('verBtn').addEventListener('click', () => {
     if (current && current.checkingUpdate) return;
     vscode.postMessage({ type: 'checkUpdate' });
   });
