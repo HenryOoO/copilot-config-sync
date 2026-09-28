@@ -41,13 +41,42 @@ export function activate(context: vscode.ExtensionContext): void {
   const panel = new SyncPanel(
     context,
     async () => {
-      await runSync(engine, panel);
+      try {
+        await runSync(engine, panel);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message !== 'passphrase required' && message !== 'cancelled') {
+          vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
+        }
+      }
     },
     async () => {
-      await runOp(panel, '推送中…', () => engine.push());
+      try {
+        await runOp(panel, '推送中…', async () => {
+          const r = await engine.push();
+          recordHistory(panel, 'push', r.files);
+          await refreshPanel(engine, panel, backend);
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message !== 'passphrase required' && message !== 'cancelled') {
+          vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
+        }
+      }
     },
     async () => {
-      await runOp(panel, '拉取中…', () => engine.pull());
+      try {
+        await runOp(panel, '拉取中…', async () => {
+          const r = await engine.pull();
+          recordHistory(panel, 'pull', r.files);
+          await refreshPanel(engine, panel, backend);
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message !== 'passphrase required' && message !== 'cancelled') {
+          vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
+        }
+      }
     },
     async (category, enabled) => {
       const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
@@ -101,61 +130,6 @@ export function activate(context: vscode.ExtensionContext): void {
       { resolveWebviewView: (view) => panel.resolveWebviewView(view) },
       { webviewOptions: { retainContextWhenHidden: true } }
     )
-  );
-
-  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  statusBar.text = '$(cloud-upload) Copilot Sync';
-  statusBar.tooltip = 'Copilot Config Sync';
-  statusBar.command = 'copilotConfigSync.syncNow';
-  statusBar.show();
-  context.subscriptions.push(statusBar);
-
-  const wrap = (title: string, fn: () => Promise<string>) => async () => {
-    try {
-      const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title }, fn);
-      statusBar.text = '$(cloud-upload) Copilot Sync ✓';
-      vscode.window.showInformationMessage(`Copilot Config Sync: ${result}`);
-    } catch (err) {
-      statusBar.text = '$(cloud-upload) Copilot Sync ⚠';
-      const message = err instanceof Error ? err.message : String(err);
-      if (message !== 'passphrase required' && message !== 'cancelled') {
-        vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
-      }
-    }
-  };
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('copilotConfigSync.syncNow', wrap('Syncing Copilot config…', () => runSync(engine, panel))),
-    vscode.commands.registerCommand(
-      'copilotConfigSync.push',
-      wrap('Pushing Copilot config…', async () => {
-        const r = await engine.push();
-        recordHistory(panel, 'push', r.files);
-        await refreshPanel(engine, panel, backend);
-        return r.result;
-      })
-    ),
-    vscode.commands.registerCommand(
-      'copilotConfigSync.pull',
-      wrap('Pulling Copilot config…', async () => {
-        const r = await engine.pull();
-        recordHistory(panel, 'pull', r.files);
-        await refreshPanel(engine, panel, backend);
-        return r.result;
-      })
-    ),
-    vscode.commands.registerCommand('copilotConfigSync.showStatus', async () => {
-      const gistId = await backend.getGistId();
-      vscode.window.showInformationMessage(gistId ? `Sync gist: ${gistId}` : 'No remote sync yet. Run "Copilot Sync: Push" first.');
-    }),
-    vscode.commands.registerCommand('copilotConfigSync.resetSync', async () => {
-      const confirm = await vscode.window.showWarningMessage('Delete the remote sync bundle? Local files are not touched.', { modal: true }, 'Delete');
-      if (confirm !== 'Delete') {
-        return;
-      }
-      await backend.delete();
-      panel.setState({ status: 'not-setup', gistId: undefined, history: [] });
-    })
   );
 
   void refreshPanel(engine, panel, backend);

@@ -11,60 +11,28 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:copilotConfigSync.syncNow",
-    "onCommand:copilotConfigSync.push",
-    "onCommand:copilotConfigSync.pull",
-    "onCommand:copilotConfigSync.showStatus",
-    "onCommand:copilotConfigSync.resetSync",
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
-  "viewsContainers": {
-    "activitybar": [
-      {
-        "id": "copilotConfigSync",
-        "title": "Copilot Config Sync",
-        "icon": "media/sync-icon.svg"
-      }
-    ]
-  },
-  "views": {
-    "copilotConfigSync": [
-      {
-        "type": "webview",
-        "id": "copilotConfigSync.panel",
-        "name": "Sync"
-      }
-    ]
-  },
-  "commands": [
-      {
-        "command": "copilotConfigSync.syncNow",
-        "title": "Copilot Sync: Sync Now",
-        "category": "Copilot Config Sync"
-      },
-      {
-        "command": "copilotConfigSync.push",
-        "title": "Copilot Sync: Push to Cloud",
-        "category": "Copilot Config Sync"
-      },
-      {
-        "command": "copilotConfigSync.pull",
-        "title": "Copilot Sync: Pull from Cloud",
-        "category": "Copilot Config Sync"
-      },
-      {
-        "command": "copilotConfigSync.showStatus",
-        "title": "Copilot Sync: Show Status",
-        "category": "Copilot Config Sync"
-      },
-      {
-        "command": "copilotConfigSync.resetSync",
-        "title": "Copilot Sync: Reset Sync (delete remote bundle)",
-        "category": "Copilot Config Sync"
-      }
-    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "copilotConfigSync",
+          "title": "Copilot Config Sync",
+          "icon": "media/sync-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "copilotConfigSync": [
+        {
+          "type": "webview",
+          "id": "copilotConfigSync.panel",
+          "name": "Sync"
+        }
+      ]
+    },
     "configuration": {
       "title": "Copilot Config Sync",
       "properties": {
