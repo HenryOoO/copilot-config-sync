@@ -56,34 +56,6 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       }
     },
-    async () => {
-      try {
-        await runOp(panel, '推送中…', async () => {
-          const r = await engine.push();
-          recordHistory(context, panel, 'push', r.files, r.detail);
-          await refreshPanel(engine, panel, backend, context);
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message !== 'passphrase required' && message !== 'cancelled') {
-          vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
-        }
-      }
-    },
-    async () => {
-      try {
-        await runOp(panel, '拉取中…', async () => {
-          const r = await engine.pull();
-          recordHistory(context, panel, 'pull', r.files, r.detail);
-          await refreshPanel(engine, panel, backend, context);
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message !== 'passphrase required' && message !== 'cancelled') {
-          vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
-        }
-      }
-    },
     async (category, enabled) => {
       const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
       const current = config.get<Record<string, boolean>>('categories', {});
@@ -247,17 +219,6 @@ function recordHistory(
 
 function loadHistory(context: vscode.ExtensionContext): PanelState['history'] {
   return context.globalState.get<PanelState['history']>('copilotConfigSync.history', []);
-}
-
-async function runOp(panel: SyncPanel, title: string, fn: () => Promise<unknown>): Promise<void> {
-  panel.setState({ status: 'syncing' });
-  try {
-    await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title }, fn);
-    panel.setState({ status: 'ok', lastSyncAt: new Date().toISOString() });
-  } catch (err) {
-    panel.setState({ status: 'error' });
-    throw err;
-  }
 }
 
 async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistBackend, context: vscode.ExtensionContext): Promise<void> {

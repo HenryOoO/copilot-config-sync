@@ -22,8 +22,6 @@ export class SyncPanel {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly onSyncNow: () => Promise<void>,
-    private readonly onPush: () => Promise<void>,
-    private readonly onPull: () => Promise<void>,
     private readonly onToggleCategory: (category: string, enabled: boolean) => Promise<void>,
     private readonly onSetup: (mode: 'create' | 'connect', gistName: string, gistId: string, passphrase: string) => Promise<void>,
     private readonly onSaveSettings: (settings: { gistName: string; gistId: string; deviceName: string; passphrase?: string }) => Promise<void>,
@@ -45,12 +43,6 @@ export class SyncPanel {
       switch (msg.type) {
         case 'syncNow':
           await this.onSyncNow();
-          break;
-        case 'push':
-          await this.onPush();
-          break;
-        case 'pull':
-          await this.onPull();
           break;
         case 'toggle':
           await this.onToggleCategory(msg.category, msg.enabled);
@@ -418,9 +410,7 @@ export class SyncPanel {
     </div>
 
     <div class="actions">
-      <button class="primary" id="syncBtn">立即同步</button>
-      <button class="secondary" id="pushBtn">推送</button>
-      <button class="secondary" id="pullBtn">拉取</button>
+      <button class="primary" id="syncBtn" style="width:100%">立即同步</button>
     </div>
 
     <div class="section-title">
@@ -554,8 +544,6 @@ export class SyncPanel {
     pulse.className = 'pulse';
     const busy = state.status === 'syncing';
     $('syncBtn').disabled = busy;
-    $('pushBtn').disabled = busy;
-    $('pullBtn').disabled = busy;
     const trackLabel = $('trackLabel');
     switch (state.status) {
       case 'syncing': dot.classList.add('syncing'); text.textContent = '同步中…'; pulse.classList.add('syncing'); trackLabel.textContent = '同步中'; break;
@@ -745,8 +733,6 @@ export class SyncPanel {
   });
   $('manageCancel').addEventListener('click', () => setManaging(false));
   $('syncBtn').addEventListener('click', () => vscode.postMessage({ type: 'syncNow' }));
-  $('pushBtn').addEventListener('click', () => vscode.postMessage({ type: 'push' }));
-  $('pullBtn').addEventListener('click', () => vscode.postMessage({ type: 'pull' }));
   $('checkUpdateBtn').addEventListener('click', () => {
     if (current && current.checkingUpdate) return;
     vscode.postMessage({ type: 'checkUpdate' });
