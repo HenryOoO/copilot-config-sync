@@ -3,11 +3,13 @@ import * as vscode from 'vscode';
 export interface PanelState {
   status: 'idle' | 'syncing' | 'ok' | 'error' | 'not-setup';
   lastSyncAt?: string;
-  lastSyncDevice?: string;
   gistId?: string;
+  gistName?: string;
+  deviceName?: string;
+  hasPassphrase?: boolean;
   counts: Record<string, number>;
   enabled: Record<string, boolean>;
-  history: Array<{ category: string; files: number; direction: 'up' | 'down'; at: string }>;
+  history: Array<{ category: string; files: number; direction: 'up' | 'down'; at: string; detail?: Record<string, number> }>;
 }
 
 export class SyncPanel {
@@ -20,7 +22,8 @@ export class SyncPanel {
     private readonly onPush: () => Promise<void>,
     private readonly onPull: () => Promise<void>,
     private readonly onToggleCategory: (category: string, enabled: boolean) => Promise<void>,
-    private readonly onReset: () => Promise<void>
+    private readonly onSetup: (mode: 'create' | 'connect', gistName: string, gistId: string, passphrase: string) => Promise<void>,
+    private readonly onSaveSettings: (settings: { gistName: string; gistId: string; deviceName: string; passphrase?: string }) => Promise<void>
   ) {
     this.state = {
       status: 'idle',
@@ -48,8 +51,11 @@ export class SyncPanel {
         case 'toggle':
           await this.onToggleCategory(msg.category, msg.enabled);
           break;
-        case 'reset':
-          await this.onReset();
+        case 'setup':
+          await this.onSetup(msg.mode, msg.gistName, msg.gistId, msg.passphrase);
+          break;
+        case 'saveSettings':
+          await this.onSaveSettings(msg.settings);
           break;
         case 'ready':
           this.postState();
@@ -75,45 +81,33 @@ export class SyncPanel {
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
-  :root {
-    --pulse-speed: 1.6s;
-  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: var(--vscode-font-family);
     font-size: var(--vscode-font-size, 13px);
     color: var(--vscode-sideBar-foreground);
     background: var(--vscode-sideBar-background);
-    padding: 14px 14px 20px;
+    padding: 14px 14px 28px;
     user-select: none;
+    position: relative;
   }
 
   /* ── header ── */
-  .brand {
-    display: flex; align-items: center; gap: 8px;
-    margin-bottom: 4px;
-  }
+  .brand { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .brand .glyph {
     width: 22px; height: 22px; border-radius: 6px;
     display: grid; place-items: center;
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
-    font-weight: 700; font-size: 12px; letter-spacing: -0.5px;
+    font-weight: 700; font-size: 12px;
   }
-  .brand h1 {
-    font-size: 13px; font-weight: 600; letter-spacing: 0.2px;
-    color: var(--vscode-sideBar-foreground);
-  }
+  .brand h1 { font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
   .statusline {
     display: flex; align-items: center; gap: 6px;
     font-size: 11.5px; color: var(--vscode-descriptionForeground);
     margin: 6px 0 12px 30px;
   }
-  .dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--vscode-charts-green);
-    flex: none;
-  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
   .dot.syncing { background: var(--vscode-charts-yellow); animation: blink 1s infinite; }
   .dot.warn { background: var(--vscode-charts-orange); }
   .dot.off { background: var(--vscode-charts-gray, #888); }
@@ -144,11 +138,21 @@ export class SyncPanel {
     position: absolute; inset: 0;
     background: linear-gradient(90deg, transparent, var(--vscode-focusBorder, var(--vscode-button-background)), transparent);
     transform: translateX(-100%);
-    animation: flow var(--pulse-speed) linear infinite;
+    animation: flow 1.6s linear infinite;
     opacity: 0;
   }
+  .track-label {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 9.5px; font-weight: 600; letter-spacing: 0.5px;
+    color: var(--vscode-descriptionForeground);
+    background: var(--vscode-sideBar-background);
+    padding: 0 6px;
+    white-space: nowrap;
+  }
+  .pulse.ok .track-label { color: var(--vscode-charts-green); }
+  .pulse.off .track-label { color: var(--vscode-charts-gray, #888); }
   .pulse.syncing .track .flow { opacity: 1; }
-  .pulse.ok .track .flow { animation: none; opacity: 0; }
   .pulse.ok .track::after {
     content: ''; position: absolute; inset: 0;
     background: var(--vscode-charts-green); border-radius: 2px;
@@ -173,15 +177,8 @@ export class SyncPanel {
   button:hover { filter: brightness(1.12); }
   button:active { filter: brightness(0.92); }
   button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-  .primary {
-    flex: 1;
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-  }
-  .secondary {
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-  }
+  .primary { flex: 1; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   button:disabled { opacity: 0.5; cursor: default; }
 
   /* ── sections ── */
@@ -190,12 +187,22 @@ export class SyncPanel {
     text-transform: uppercase;
     color: var(--vscode-descriptionForeground);
     margin: 0 0 6px 2px;
+    display: flex; align-items: center; justify-content: space-between;
   }
+  .section-title .manage {
+    background: none; border: none; cursor: pointer;
+    font-size: 10.5px; letter-spacing: 0.4px;
+    color: var(--vscode-focusBorder, var(--vscode-button-background));
+    padding: 0 2px; text-transform: none; font-weight: 500;
+  }
+  .section-title .manage:hover { text-decoration: underline; filter: none; }
+
   .cat-list {
     border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.2));
     border-radius: 8px; overflow: hidden;
     margin-bottom: 16px;
   }
+  .cat-list.hidden { display: none; }
   .cat {
     display: flex; align-items: center; gap: 9px;
     padding: 7px 11px;
@@ -206,50 +213,135 @@ export class SyncPanel {
   .cat + .cat { border-top: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.15)); }
   .cat input[type="checkbox"] {
     accent-color: var(--vscode-checkbox-background, var(--vscode-focusBorder));
-    width: 14px; height: 14px; cursor: pointer;
+    width: 14px; height: 14px; cursor: pointer; pointer-events: none;
   }
   .cat .name { flex: 1; font-size: 12.5px; }
   .cat .count {
     font-size: 11px; font-variant-numeric: tabular-nums;
-    color: var(--vscode-descriptionForeground);
     background: var(--vscode-badge-background);
     color: var(--vscode-badge-foreground);
     border-radius: 9px; padding: 1px 7px;
   }
   .cat.off .name { opacity: 0.55; }
+  .cat-actions { display: flex; gap: 8px; margin: 8px 2px 16px; }
+  .cat-actions.hidden { display: none; }
 
-  /* ── history ── */
-  .history { display: flex; flex-direction: column; gap: 3px; }
+  /* ── history (scrollable, lazy) ── */
+  .history {
+    display: flex; flex-direction: column; gap: 3px;
+    max-height: 132px; overflow-y: auto;
+    padding-right: 2px;
+  }
+  .history::-webkit-scrollbar { width: 8px; }
+  .history::-webkit-scrollbar-thumb { background: var(--vscode-editorWidget-border, rgba(128,128,128,0.3)); border-radius: 4px; }
   .h-item {
     display: flex; align-items: center; gap: 8px;
     font-size: 11.5px; color: var(--vscode-descriptionForeground);
-    padding: 3px 2px;
+    padding: 3px 4px; flex: none;
+    border-radius: 4px; cursor: pointer;
   }
+  .h-item:hover { background: var(--vscode-list-hoverBackground); }
+  .h-item:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
   .h-item .arrow { font-size: 11px; width: 14px; text-align: center; }
   .h-item .cat-name { color: var(--vscode-sideBar-foreground); }
   .h-item .time { margin-left: auto; font-variant-numeric: tabular-nums; opacity: 0.75; }
-  .empty {
+  .empty { font-size: 11.5px; color: var(--vscode-descriptionForeground); padding: 8px 2px; font-style: italic; }
+
+  /* ── setup (first-run) ── */
+  .setup { margin-bottom: 16px; }
+  .setup .hint {
     font-size: 11.5px; color: var(--vscode-descriptionForeground);
-    padding: 8px 2px; font-style: italic;
+    line-height: 1.5; margin-bottom: 12px;
+  }
+  .field { margin-bottom: 10px; }
+  .field label {
+    display: block; font-size: 11px; font-weight: 600;
+    color: var(--vscode-sideBar-foreground); margin-bottom: 4px;
+  }
+  .field input {
+    width: 100%;
+    font-family: var(--vscode-font-family);
+    font-size: 12px;
+    color: var(--vscode-input-foreground);
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
+    border-radius: 4px; padding: 5px 8px;
+    outline: none;
+  }
+  .field input:focus { border-color: var(--vscode-focusBorder); }
+  .field .sub { font-size: 10.5px; color: var(--vscode-descriptionForeground); margin-top: 3px; }
+  .mode-row { display: flex; gap: 6px; margin-bottom: 12px; }
+  .mode-row button {
+    flex: 1; padding: 5px 8px; font-size: 11.5px;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border-radius: 5px;
+  }
+  .mode-row button.active {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+  }
+  .setup .error {
+    font-size: 11px; color: var(--vscode-errorForeground);
+    margin: 4px 0 8px; min-height: 14px;
+  }
+  .hidden { display: none; }
+
+  /* ── global settings ── */
+  .settings {
+    border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.2));
+    border-radius: 8px;
+    padding: 10px 11px;
+    margin-bottom: 8px;
+  }
+  .dirty-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--vscode-charts-green);
+    display: inline-block;
   }
 
-  /* ── footer ── */
-  .footer {
-    margin-top: 18px; padding-top: 10px;
-    border-top: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.15));
-    display: flex; justify-content: space-between; align-items: center;
+  /* ── detail modal ── */
+  .modal-mask {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: grid; place-items: center;
+    z-index: 100;
   }
-  .footer .gist {
-    font-size: 10.5px; color: var(--vscode-descriptionForeground);
-    font-family: var(--vscode-editor-font-family, monospace);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    max-width: 70%;
+  .modal {
+    width: 240px; max-height: 320px;
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+    border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.3));
+    border-radius: 8px;
+    padding: 12px;
+    display: flex; flex-direction: column;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
   }
-  .footer .reset {
-    background: none; color: var(--vscode-errorForeground);
-    font-size: 10.5px; padding: 2px 6px; cursor: pointer;
+  .modal h2 {
+    font-size: 12px; font-weight: 600; margin-bottom: 2px;
   }
-  .footer .reset:hover { text-decoration: underline; filter: none; }
+  .modal-x {
+    position: absolute; top: 6px; right: 8px;
+    background: none; border: none;
+    font-size: 16px; line-height: 1;
+    color: var(--vscode-descriptionForeground);
+    padding: 2px 6px; cursor: pointer;
+  }
+  .modal-x:hover { color: var(--vscode-sideBar-foreground); filter: none; }
+  .modal { position: relative; }
+  .modal .sub { font-size: 10.5px; color: var(--vscode-descriptionForeground); margin-bottom: 10px; }
+  .modal .rows { overflow-y: auto; flex: 1; }
+  .modal .row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; padding: 4px 2px;
+  }
+  .modal .row .name { flex: 1; }
+  .modal .row .n { font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground); }
+  .modal .close {
+    margin-top: 10px;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    align-self: flex-end;
+  }
 </style>
 </head>
 <body>
@@ -259,90 +351,116 @@ export class SyncPanel {
   </div>
   <div class="statusline"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
 
-  <div class="pulse" id="pulse">
-    <div class="endpoint"><span class="codicon-ish">⌂</span>本机</div>
-    <div class="track"><div class="flow"></div></div>
-    <div class="endpoint"><span class="codicon-ish">☁</span>云端</div>
+  <!-- setup: shown when not connected -->
+  <div class="setup" id="setup">
+    <div class="hint">连接一个私有 Gist 来保存你的 Copilot 配置。口令用于加密配置中的敏感字段，<b>丢失后无法恢复</b>。</div>
+    <div class="mode-row">
+      <button id="modeCreate" class="active">新建 Gist</button>
+      <button id="modeConnect">连接已有</button>
+    </div>
+    <div class="field" id="fieldName">
+      <label>Gist 名称</label>
+      <input type="text" id="gistName" value="copilot-config-sync" placeholder="copilot-config-sync">
+      <div class="sub">用于识别你的同步仓库</div>
+    </div>
+    <div class="field hidden" id="fieldGistId">
+      <label>Gist ID</label>
+      <input type="text" id="gistIdInput" placeholder="粘贴 gist id（网址最后一段）">
+    </div>
+    <div class="field">
+      <label>同步口令</label>
+      <input type="password" id="passphrase" placeholder="设置一个口令">
+      <div class="sub">加密敏感字段（API key 等）。仅存本机钥匙串，不会上传。</div>
+    </div>
+    <div class="field hidden" id="fieldPassphrase2">
+      <label>确认口令</label>
+      <input type="password" id="passphrase2" placeholder="再输入一次">
+    </div>
+    <div class="error" id="setupError"></div>
+    <div class="actions" style="margin-bottom:0">
+      <button class="primary" id="setupBtn">初始化</button>
+    </div>
   </div>
 
-  <div class="actions">
-    <button class="primary" id="syncBtn">立即同步</button>
-    <button class="secondary" id="pushBtn">推送</button>
-    <button class="secondary" id="pullBtn">拉取</button>
-  </div>
+  <!-- connected: main UI -->
+  <div id="main" class="hidden">
+    <div class="pulse" id="pulse">
+      <div class="endpoint"><span class="codicon-ish">⌂</span>本机</div>
+      <div class="track"><div class="flow"></div><span class="track-label" id="trackLabel"></span></div>
+      <div class="endpoint"><span class="codicon-ish">☁</span>云端</div>
+    </div>
 
-  <div class="section-title">同步内容</div>
-  <div class="cat-list" id="cats"></div>
+    <div class="actions">
+      <button class="primary" id="syncBtn">立即同步</button>
+      <button class="secondary" id="pushBtn">推送</button>
+      <button class="secondary" id="pullBtn">拉取</button>
+    </div>
 
-  <div class="section-title">最近同步</div>
-  <div id="history"><div class="empty">还没有同步记录</div></div>
+    <div class="section-title">
+      <span>同步内容</span>
+      <span id="manageArea">
+        <button class="manage" id="manageBtn">管理</button>
+        <button class="manage hidden" id="manageSave">保存</button>
+        <button class="manage hidden" id="manageCancel">取消</button>
+      </span>
+    </div>
+    <div class="cat-list" id="cats"></div>
 
-  <div class="footer">
-    <span class="gist" id="gist">未连接</span>
-    <button class="reset" id="resetBtn">重置</button>
+    <div class="section-title"><span>最近同步</span></div>
+    <div class="history" id="history"><div class="empty">还没有同步记录</div></div>
+
+    <div class="modal-mask hidden" id="modalMask">
+      <div class="modal" role="dialog" aria-modal="true">
+        <button class="modal-x" id="modalX" aria-label="关闭">×</button>
+        <h2 id="modalTitle">同步详情</h2>
+        <div class="sub" id="modalSub"></div>
+        <div class="rows" id="modalRows"></div>
+        <button class="close" id="modalClose">关闭</button>
+      </div>
+    </div>
+
+    <div class="section-title" style="margin-top:16px">
+      <span>全局设置</span>
+      <span id="settingsDirty" class="dirty-dot hidden" title="有未保存的修改"></span>
+    </div>
+    <div class="settings" id="settings">
+      <div class="field">
+        <label>Gist 名称</label>
+        <input type="text" id="setGistName" placeholder="copilot-config-sync">
+        <div class="sub">用于自动识别你的同步仓库（新建时也用这个名称）</div>
+      </div>
+      <div class="field">
+        <label>Gist ID</label>
+        <input type="text" id="setGistId" placeholder="留空则按名称自动查找/创建">
+        <div class="sub">显式指定后所有机器强制连到这一个 gist</div>
+      </div>
+      <div class="field">
+        <label>本机设备名</label>
+        <input type="text" id="setDeviceName" placeholder="默认为主机名">
+        <div class="sub">记录在同步清单里，用于区分哪台机器推送的</div>
+      </div>
+      <div class="field">
+        <label>同步口令</label>
+        <input type="password" id="setPassphrase" placeholder="已设置 — 输入新值可更换">
+        <div class="sub">加密敏感字段。更换口令后，其他机器需用新口令才能解密。</div>
+      </div>
+      <div class="error" id="settingsError"></div>
+      <div class="actions" style="margin-bottom:0">
+        <button class="primary" id="settingsSave">保存设置</button>
+      </div>
+    </div>
   </div>
 
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
-
-  function render(state) {
-    const dot = $('dot'), text = $('statusText'), pulse = $('pulse');
-    dot.className = 'dot';
-    pulse.className = 'pulse';
-    const syncBtn = $('syncBtn');
-    syncBtn.disabled = state.status === 'syncing';
-    $('pushBtn').disabled = state.status === 'syncing';
-    $('pullBtn').disabled = state.status === 'syncing';
-    switch (state.status) {
-      case 'syncing':
-        dot.classList.add('syncing'); text.textContent = '同步中…'; pulse.classList.add('syncing');
-        break;
-      case 'ok': {
-        dot.classList.add(''); text.textContent = '已同步' + (state.lastSyncAt ? ' · ' + relTime(state.lastSyncAt) : '');
-        pulse.classList.add('ok');
-        break;
-      }
-      case 'warn': dot.classList.add('warn'); text.textContent = '有冲突待处理'; break;
-      case 'not-setup': dot.classList.add('off'); text.textContent = '未设置 — 点击「立即同步」开始'; break;
-      default: text.textContent = '空闲';
-    }
-    // categories
-    const cats = Object.keys(state.counts);
-    const catList = $('cat-list-placeholder');
-    const listEl = document.getElementById('cats');
-    listEl.innerHTML = cats.map((c) => {
-      const on = state.enabled[c] !== false;
-      return '<div class="cat' + (on ? '' : ' off') + '" data-cat="' + c + '">' +
-        '<input type="checkbox" ' + (on ? 'checked' : '') + ' aria-label="' + c + '">' +
-        '<span class="name">' + label(c) + '</span>' +
-        '<span class="count">' + (state.counts[c] || 0) + '</span>' +
-        '</div>';
-    }).join('');
-    listEl.querySelectorAll('.cat').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        if (e.target.tagName === 'INPUT') {
-          vscode.postMessage({ type: 'toggle', category: el.dataset.cat, enabled: e.target.checked });
-        }
-      });
-    });
-    // history
-    const hist = document.getElementById('history');
-    if (state.history && state.history.length) {
-      hist.innerHTML = state.history.slice(0, 5).map((h) =>
-        '<div class="h-item"><span class="arrow">' + (h.direction === 'up' ? '↑' : '↓') + '</span>' +
-        '<span class="cat-name">' + label(h.category) + '</span>' +
-        '<span>' + h.files + ' 文件</span>' +
-        '<span class="time">' + relTime(h.at) + '</span></div>'
-      ).join('');
-    } else {
-      hist.innerHTML = '<div class="empty">还没有同步记录</div>';
-    }
-    $('gist').textContent = state.gistId ? 'gist ' + state.gistId.slice(0, 10) + '…' : '未连接';
-  }
+  let current = null;
+  let managing = false;
+  let draftEnabled = {};
+  let mode = 'create';
 
   function label(c) {
-    const names = { skills: 'Skills', instructions: 'Instructions', agents: 'Agents', hooks: 'Hooks', prompts: 'Prompts', mcp: 'MCP Servers', lmProviders: 'LM Providers' };
+    const names = { skills: 'Skills', instructions: 'Instructions', agents: 'Agents', hooks: 'Hooks', prompts: 'Prompts', mcp: 'MCP Servers', lmProviders: 'LM Providers', sync: '同步' };
     return names[c] || c;
   }
   function relTime(iso) {
@@ -355,13 +473,236 @@ export class SyncPanel {
     return Math.floor(h / 24) + ' 天前';
   }
 
+  function renderCats() {
+    const listEl = $('cats');
+    const cats = Object.keys(current.counts);
+    listEl.innerHTML = cats.map((c) => {
+      const on = managing ? (draftEnabled[c] !== false) : (current.enabled[c] !== false);
+      const cb = managing ? '<input type="checkbox" ' + (on ? 'checked' : '') + ' tabindex="-1">' : '';
+      return '<div class="cat' + (on ? '' : ' off') + '" data-cat="' + c + '">' +
+        cb +
+        '<span class="name">' + label(c) + '</span>' +
+        '<span class="count">' + (current.counts[c] || 0) + '</span>' +
+        '</div>';
+    }).join('');
+    if (managing) {
+      listEl.querySelectorAll('.cat').forEach((el) => {
+        el.addEventListener('click', () => {
+          const cat = el.dataset.cat;
+          draftEnabled[cat] = draftEnabled[cat] === false ? true : false;
+          renderCats();
+        });
+      });
+    }
+  }
+
+  function setManaging(on) {
+    managing = on;
+    $('manageBtn').classList.toggle('hidden', on);
+    $('manageSave').classList.toggle('hidden', !on);
+    $('manageCancel').classList.toggle('hidden', !on);
+    if (on) {
+      draftEnabled = Object.assign({}, current.enabled);
+    }
+    renderCats();
+  }
+
+  function render(state) {
+    current = state;
+    const connected = state.gistId && state.status !== 'not-setup';
+    $('setup').classList.toggle('hidden', connected);
+    $('main').classList.toggle('hidden', !connected);
+
+    if (!connected) {
+      $('statusText').textContent = '未设置 — 填写下方信息开始';
+      $('dot').className = 'dot off';
+      return;
+    }
+
+    const dot = $('dot'), text = $('statusText'), pulse = $('pulse');
+    dot.className = 'dot';
+    pulse.className = 'pulse';
+    const busy = state.status === 'syncing';
+    $('syncBtn').disabled = busy;
+    $('pushBtn').disabled = busy;
+    $('pullBtn').disabled = busy;
+    const trackLabel = $('trackLabel');
+    switch (state.status) {
+      case 'syncing': dot.classList.add('syncing'); text.textContent = '同步中…'; pulse.classList.add('syncing'); trackLabel.textContent = '同步中'; break;
+      case 'ok': text.textContent = '已同步' + (state.lastSyncAt ? ' · ' + relTime(state.lastSyncAt) : ''); pulse.classList.add('ok'); trackLabel.textContent = '已同步'; break;
+      case 'error': dot.classList.add('warn'); text.textContent = '同步出错'; pulse.classList.add('off'); trackLabel.textContent = '已断开'; break;
+      default: text.textContent = '空闲'; pulse.classList.add('off'); trackLabel.textContent = '未连接';
+    }
+    renderCats();
+    if (managing) { /* keep edit mode visuals */ }
+
+    // settings inputs: refill only when not mid-edit (no unsaved changes)
+    if (!isDirty()) {
+      fillSettings();
+    }
+
+    // history: lazy render in batches, load more on scroll
+    const hist = $('history');
+    histItems = state.history || [];
+    histShown = 0;
+    if (histItems.length) {
+      hist.innerHTML = '';
+      renderMoreHistory();
+    } else {
+      hist.innerHTML = '<div class="empty">还没有同步记录</div>';
+    }
+  }
+
+  const HIST_BATCH = 10;
+  let histItems = [];
+  let histShown = 0;
+
+  function renderMoreHistory() {
+    const hist = $('history');
+    const batch = histItems.slice(histShown, histShown + HIST_BATCH);
+    batch.forEach((h, i) => {
+      const div = document.createElement('div');
+      div.className = 'h-item';
+      div.tabIndex = 0;
+      div.setAttribute('role', 'button');
+      div.innerHTML =
+        '<span class="arrow">' + (h.direction === 'up' ? '↑' : '↓') + '</span>' +
+        '<span class="cat-name">' + label(h.category) + '</span>' +
+        '<span>' + h.files + ' 项</span>' +
+        '<span class="time">' + relTime(h.at) + '</span>';
+      const idx = histShown + i;
+      div.addEventListener('click', () => openDetail(idx));
+      div.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') openDetail(idx); });
+      hist.appendChild(div);
+    });
+    histShown += batch.length;
+  }
+
+  function openDetail(idx) {
+    const h = histItems[idx];
+    if (!h) return;
+    $('modalTitle').textContent = (h.direction === 'up' ? '推送' : '拉取') + '详情';
+    $('modalSub').textContent = relTime(h.at) + ' · 共 ' + h.files + ' 项';
+    const rows = $('modalRows');
+    const detail = h.detail && Object.keys(h.detail).length
+      ? h.detail
+      : { [h.category]: h.files };
+    rows.innerHTML = Object.entries(detail).map(([cat, n]) =>
+      '<div class="row"><span class="name">' + label(cat) + '</span><span class="n">' + n + ' 项</span></div>'
+    ).join('');
+    $('modalMask').classList.remove('hidden');
+    $('modalClose').focus();
+  }
+
+  // setup UI
+  $('modeCreate').addEventListener('click', () => {
+    mode = 'create';
+    $('modeCreate').classList.add('active');
+    $('modeConnect').classList.remove('active');
+    $('fieldName').classList.remove('hidden');
+    $('fieldGistId').classList.add('hidden');
+    $('fieldPassphrase2').classList.remove('hidden');
+    $('setupBtn').textContent = '初始化';
+  });
+  $('modeConnect').addEventListener('click', () => {
+    mode = 'connect';
+    $('modeConnect').classList.add('active');
+    $('modeCreate').classList.remove('active');
+    $('fieldName').classList.add('hidden');
+    $('fieldGistId').classList.remove('hidden');
+    $('fieldPassphrase2').classList.remove('hidden');
+    $('setupBtn').textContent = '连接';
+  });
+  $('setupBtn').addEventListener('click', () => {
+    const pass = $('passphrase').value;
+    const confirmVal = $('passphrase2').value;
+    if (!pass || pass.length < 4) { $('setupError').textContent = '口令至少 4 个字符'; return; }
+    if (confirmVal && pass !== confirmVal) { $('setupError').textContent = '两次输入的口令不一致'; return; }
+    const gistName = $('gistName').value.trim() || 'copilot-config-sync';
+    const gistId = $('gistIdInput').value.trim();
+    if (mode === 'connect' && !gistId) { $('setupError').textContent = '请填写 Gist ID'; return; }
+    $('setupError').textContent = '';
+    vscode.postMessage({ type: 'setup', mode, gistName, gistId, passphrase: pass });
+  });
+  // global settings: always expanded, dirty dot on change
+  let savedSnapshot = {};
+  function snapshotSettings() {
+    return {
+      gistName: $('setGistName').value,
+      gistId: $('setGistId').value,
+      deviceName: $('setDeviceName').value,
+      passphrase: $('setPassphrase').value,
+    };
+  }
+  function isDirty() {
+    return JSON.stringify(snapshotSettings()) !== JSON.stringify(savedSnapshot);
+  }
+  function refreshDirty() {
+    $('settingsDirty').classList.toggle('hidden', !isDirty());
+  }
+  function fillSettings() {
+    $('setGistName').value = current.gistName || 'copilot-config-sync';
+    $('setGistId').value = current.gistId || '';
+    $('setDeviceName').value = current.deviceName || '';
+    $('setPassphrase').value = '';
+    $('setPassphrase').placeholder = current.hasPassphrase ? '已设置 — 输入新值可更换' : '设置一个口令';
+    savedSnapshot = snapshotSettings();
+    refreshDirty();
+  }
+  ['setGistName', 'setGistId', 'setDeviceName', 'setPassphrase'].forEach((id) => {
+    $(id).addEventListener('input', refreshDirty);
+  });
+  $('modalClose').addEventListener('click', () => $('modalMask').classList.add('hidden'));
+  $('modalX').addEventListener('click', () => $('modalMask').classList.add('hidden'));
+  $('modalMask').addEventListener('click', (e) => {
+    if (e.target === $('modalMask')) $('modalMask').classList.add('hidden');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') $('modalMask').classList.add('hidden');
+  });
+
+  // lazy load on scroll
+  $('history').addEventListener('scroll', () => {
+    const el = $('history');
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 20 && histShown < histItems.length) {
+      renderMoreHistory();
+    }
+  });
+
+  $('settingsSave').addEventListener('click', () => {
+    const pass = $('setPassphrase').value;
+    if (pass && pass.length < 4) { $('settingsError').textContent = '口令至少 4 个字符'; return; }
+    $('settingsError').textContent = '';
+    savedSnapshot = snapshotSettings();
+    refreshDirty();
+    vscode.postMessage({
+      type: 'saveSettings',
+      settings: {
+        gistName: $('setGistName').value.trim() || 'copilot-config-sync',
+        gistId: $('setGistId').value.trim(),
+        deviceName: $('setDeviceName').value.trim(),
+        passphrase: pass || undefined,
+      },
+    });
+  });
+
+  $('manageBtn').addEventListener('click', () => setManaging(true));
+  $('manageSave').addEventListener('click', () => {
+    Object.keys(draftEnabled).forEach((c) => {
+      if ((current.enabled[c] !== false) !== (draftEnabled[c] !== false)) {
+        vscode.postMessage({ type: 'toggle', category: c, enabled: draftEnabled[c] !== false });
+      }
+    });
+    setManaging(false);
+  });
+  $('manageCancel').addEventListener('click', () => setManaging(false));
+  $('syncBtn').addEventListener('click', () => vscode.postMessage({ type: 'syncNow' }));
+  $('pushBtn').addEventListener('click', () => vscode.postMessage({ type: 'push' }));
+  $('pullBtn').addEventListener('click', () => vscode.postMessage({ type: 'pull' }));
+
   window.addEventListener('message', (e) => {
     if (e.data.type === 'state') render(e.data.state);
   });
-  document.getElementById('syncBtn').addEventListener('click', () => vscode.postMessage({ type: 'syncNow' }));
-  document.getElementById('pushBtn').addEventListener('click', () => vscode.postMessage({ type: 'push' }));
-  document.getElementById('pullBtn').addEventListener('click', () => vscode.postMessage({ type: 'pull' }));
-  document.getElementById('resetBtn').addEventListener('click', () => vscode.postMessage({ type: 'reset' }));
   vscode.postMessage({ type: 'ready' });
 </script>
 </body>

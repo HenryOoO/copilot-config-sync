@@ -170,7 +170,7 @@ export class SyncEngine {
   }
 
   /** Push local state to the remote bundle, resolving conflicts via UI when needed. */
-  async push(): Promise<'pushed' | 'conflict-resolved' | 'cancelled'> {
+  async push(): Promise<{ result: 'pushed' | 'conflict-resolved' | 'cancelled'; files: number }> {
     const local = this.scanLocal();
     const remoteBundle = await this.readRemoteBundle();
     const remoteManifest = remoteBundle ? manifestFromBundle(remoteBundle) : undefined;
@@ -180,7 +180,7 @@ export class SyncEngine {
     if (remoteManifest && (conflicts.conflicts.length > 0 || conflicts.remoteOnly.length > 0 || conflicts.localDeleted.length > 0)) {
       const action = await this.resolveConflicts(conflicts, local, remoteBundle!);
       if (action === 'cancelled') {
-        return 'cancelled';
+        return { result: 'cancelled', files: 0 };
       }
     }
 
@@ -191,11 +191,12 @@ export class SyncEngine {
       conflicts.conflicts.length > 0 ||
       conflicts.remoteOnly.length > 0 ||
       conflicts.localDeleted.length > 0;
-    return hadConflicts ? 'conflict-resolved' : 'pushed';
+    const files = Object.values(bundle.categories).reduce((n, p) => n + (p?.files.length || 0), 0);
+    return { result: hadConflicts ? 'conflict-resolved' : 'pushed', files };
   }
 
   /** Pull remote state to disk, backing up overwritten files. */
-  async pull(): Promise<'pulled' | 'up-to-date' | 'cancelled'> {
+  async pull(): Promise<{ result: 'pulled' | 'up-to-date' | 'cancelled'; files: number }> {
     const remoteBundle = await this.readRemoteBundle();
     if (!remoteBundle) {
       throw new Error('Nothing has been pushed yet');
@@ -209,12 +210,12 @@ export class SyncEngine {
       conflicts.localDeleted.length === 0 &&
       conflicts.conflicts.length === 0
     ) {
-      return 'up-to-date';
+      return { result: 'up-to-date', files: 0 };
     }
     if (conflicts.conflicts.length > 0) {
       const action = await this.resolveConflicts(conflicts, local, remoteBundle);
       if (action === 'cancelled') {
-        return 'cancelled';
+        return { result: 'cancelled', files: 0 };
       }
     }
     const sources = this.opts.sources || defaultSources();
@@ -246,7 +247,7 @@ export class SyncEngine {
       restored += unpackCategory(payload, baseDir).length;
     }
     await this.saveBase(remoteManifest);
-    return 'pulled';
+    return { result: 'pulled', files: restored };
   }
 
   private async buildBundle(local: Manifest): Promise<Bundle> {

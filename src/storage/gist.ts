@@ -105,6 +105,16 @@ export class GistBackend implements StorageBackend {
         await this.setGistId(undefined);
       }
     }
+    // explicit setting takes precedence over search
+    const configured = vscode.workspace
+      .getConfiguration('copilotConfigSync')
+      .get<string>('gistId', '')
+      .trim();
+    if (configured) {
+      await this.request('GET', `${API_BASE}/gists/${configured}`); // validate access
+      await this.setGistId(configured);
+      return configured;
+    }
     // search user's gists for one with our description
     const { json } = await this.request('GET', `${API_BASE}/gists?per_page=100`);
     const gists = (Array.isArray(json) ? json : []) as Gist[];
@@ -121,6 +131,34 @@ export class GistBackend implements StorageBackend {
     const gist = created.json as Gist;
     await this.setGistId(gist.id);
     return gist.id;
+  }
+
+  /** Create a fresh gist with a user-chosen description (from setup UI). */
+  async createGist(description: string): Promise<string> {
+    const created = await this.request('POST', `${API_BASE}/gists`, {
+      description,
+      public: false,
+      files: { [GIST_FILENAME]: { content: '{}' } },
+    });
+    const gist = created.json as Gist;
+    await this.setGistId(gist.id);
+    return gist.id;
+  }
+
+  /** Connect to an existing gist by id (from setup UI). */
+  async connectGist(gistId: string): Promise<void> {
+    await this.request('GET', `${API_BASE}/gists/${gistId.trim()}`); // validate access
+    await this.setGistId(gistId.trim());
+  }
+
+  /** True if a passphrase is already stored. */
+  async hasPassphrase(): Promise<boolean> {
+    return Boolean(await this.secretStorage.get('copilotConfigSync.passphrase'));
+  }
+
+  /** Store the passphrase (called from setup UI). */
+  async setPassphrase(passphrase: string): Promise<void> {
+    await this.secretStorage.store('copilotConfigSync.passphrase', passphrase);
   }
 
   async read(): Promise<Bundle | undefined> {

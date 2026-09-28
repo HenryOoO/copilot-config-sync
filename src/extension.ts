@@ -55,17 +55,43 @@ export function activate(context: vscode.ExtensionContext): void {
       await config.update('categories', { ...current, [category]: enabled }, vscode.ConfigurationTarget.Global);
       engine['opts'].enabledCategories[category as CategoryId] = enabled;
     },
-    async () => {
-      const confirm = await vscode.window.showWarningMessage(
-        '删除远端同步？本地文件不受影响。',
-        { modal: true },
-        '删除'
-      );
-      if (confirm !== '删除') {
-        return;
+    async (mode, gistName, gistId, passphrase) => {
+      try {
+        if (mode === 'create') {
+          await backend.createGist(gistName);
+        } else {
+          await backend.connectGist(gistId);
+        }
+        await backend.setPassphrase(passphrase);
+        await refreshPanel(engine, panel, backend);
+        vscode.window.showInformationMessage('Copilot Config Sync: 已连接，可以开始同步了');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
       }
-      await backend.delete();
-      panel.setState({ status: 'not-setup', gistId: undefined, history: [] });
+    },
+    async (settings) => {
+      try {
+        const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+        if (settings.gistName) {
+          await config.update('gistDescription', settings.gistName, vscode.ConfigurationTarget.Global);
+        }
+        await config.update('gistId', settings.gistId, vscode.ConfigurationTarget.Global);
+        if (settings.deviceName) {
+          await config.update('deviceName', settings.deviceName, vscode.ConfigurationTarget.Global);
+          engine['opts'].deviceName = settings.deviceName;
+        }
+        if (settings.passphrase) {
+          await backend.setPassphrase(settings.passphrase);
+        }
+        // if gistId changed, reconnect
+        await backend.setGistId(settings.gistId || undefined);
+        await refreshPanel(engine, panel, backend);
+        vscode.window.showInformationMessage('Copilot Config Sync: 设置已保存');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
+      }
     }
   );
 
@@ -104,16 +130,18 @@ export function activate(context: vscode.ExtensionContext): void {
       'copilotConfigSync.push',
       wrap('Pushing Copilot config…', async () => {
         const r = await engine.push();
+        recordHistory(panel, 'push', r.files);
         await refreshPanel(engine, panel, backend);
-        return String(r);
+        return r.result;
       })
     ),
     vscode.commands.registerCommand(
       'copilotConfigSync.pull',
       wrap('Pulling Copilot config…', async () => {
         const r = await engine.pull();
+        recordHistory(panel, 'pull', r.files);
         await refreshPanel(engine, panel, backend);
-        return String(r);
+        return r.result;
       })
     ),
     vscode.commands.registerCommand('copilotConfigSync.showStatus', async () => {
@@ -150,10 +178,25 @@ async function runSync(engine: SyncEngine, panel: SyncPanel): Promise<string> {
         panel.setState({ status: 'idle' });
         return 'cancelled';
       }
-      result = choice.value === 'push' ? String(await engine.push()) : String(await engine.pull());
+      const op = choice.value === 'push' ? await engine.push() : await engine.pull();
+      result = op.result;
+      recordHistory(panel, choice.value, op.files);
     } else {
-      await engine.pull();
-      result = String(await engine.push());
+      const before = categoryCounts(engine);
+      const pulled = await engine.pull();
+      const pushed = await engine.push();
+      result = pushed.result;
+      const after = categoryCounts(engine);
+      // one aggregated entry per sync: direction by net effect
+      const files = (pulled.files || 0) + (pushed.files || 0);
+      const detail: Record<string, number> = {};
+      for (const cat of Object.keys({ ...before, ...after })) {
+        const delta = (after[cat] || 0) - (before[cat] || 0);
+        if (delta !== 0) {
+          detail[cat] = delta;
+        }
+      }
+      recordHistory(panel, 'push', files, Object.keys(detail).length ? detail : undefined);
     }
     panel.setState({ status: 'ok', lastSyncAt: new Date().toISOString() });
     return result;
@@ -161,6 +204,35 @@ async function runSync(engine: SyncEngine, panel: SyncPanel): Promise<string> {
     panel.setState({ status: 'error' });
     throw err;
   }
+}
+
+function recordHistory(
+  panel: SyncPanel,
+  direction: 'push' | 'pull',
+  files: number,
+  detail?: Record<string, number>
+): void {
+  const current = panel['state'].history || [];
+  const entry: PanelState['history'][number] = {
+    category: 'sync',
+    files,
+    direction: direction === 'push' ? 'up' : 'down',
+    at: new Date().toISOString(),
+    detail,
+  };
+  panel.setState({
+    history: [entry, ...current].slice(0, 50),
+  });
+}
+
+/** Per-category file counts from the current manifest. */
+function categoryCounts(engine: SyncEngine): Record<string, number> {
+  const manifest = scanManifest(defaultSources(), engine['opts'].deviceName);
+  const out: Record<string, number> = {};
+  for (const [cat, data] of Object.entries(manifest.categories)) {
+    out[cat] = data.files.length;
+  }
+  return out;
 }
 
 async function runOp(panel: SyncPanel, title: string, fn: () => Promise<unknown>): Promise<void> {
@@ -178,13 +250,22 @@ async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistB
   const manifest = scanManifest(defaultSources(), engine['opts'].deviceName);
   const counts: Record<string, number> = {};
   for (const [cat, data] of Object.entries(manifest.categories)) {
-    counts[cat] = data.files.length;
+    if (cat === 'skills') {
+      // count skills (SKILL.md entries), not files
+      counts[cat] = data.files.filter((f) => f.path.toLowerCase().endsWith('/skill.md') || f.path.toLowerCase() === 'skill.md').length;
+    } else {
+      counts[cat] = data.files.length;
+    }
   }
   const gistId = await backend.getGistId();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const state: Partial<PanelState> = {
     counts,
     enabled: engine['opts'].enabledCategories as Record<string, boolean>,
     gistId,
+    gistName: config.get<string>('gistDescription', 'copilot-config-sync'),
+    deviceName: engine['opts'].deviceName,
+    hasPassphrase: Boolean(await engine['opts'].secretStorage.get('copilotConfigSync.passphrase')),
     status: gistId ? 'ok' : 'not-setup',
   };
   panel.setState(state);

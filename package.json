@@ -86,6 +86,11 @@
           "default": "copilot-config-sync",
           "description": "Description used to find/create the sync gist."
         },
+        "copilotConfigSync.gistId": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit gist ID to sync with. Leave empty to auto-find/create a private gist by description. Set this to share one gist across machines without relying on search."
+        },
         "copilotConfigSync.deviceName": {
           "type": "string",
           "default": "",
