@@ -13,6 +13,10 @@ export interface PanelState {
   version?: string;
   update?: { latest: string; command: string };
   checkingUpdate?: boolean;
+  /** true after at least one update check in this session. */
+  updateChecked?: boolean;
+  /** Transient in-panel toast; replaces native bottom-right messages. */
+  toast?: { text: string; kind: 'info' | 'error'; seq: number };
 }
 
 export class SyncPanel {
@@ -69,6 +73,11 @@ export class SyncPanel {
     this.postState();
   }
 
+  /** Show a transient toast inside the panel instead of a native message. */
+  toast(text: string, kind: 'info' | 'error' = 'info'): void {
+    this.setState({ toast: { text, kind, seq: (this.state.toast?.seq || 0) + 1 } });
+  }
+
   private postState(): void {
     this.view?.webview.postMessage({ type: 'state', state: this.state });
   }
@@ -104,18 +113,6 @@ export class SyncPanel {
   .dot.off { background: var(--vscode-charts-gray, #888); }
   @keyframes blink { 50% { opacity: 0.35; } }
 
-  /* ── update banner ── */
-  .update-banner {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 11px; margin: 0 0 12px;
-    border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.3));
-    border-radius: 8px;
-    font-size: 11.5px;
-  }
-  .update-banner .ver { color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
-  .update-banner button { padding: 3px 10px; font-size: 11px; flex: none; }
-  .update-banner .copy-ok { color: var(--vscode-charts-green); font-size: 11px; }
-
   /* ── signature: sync pulse ── */
   .pulse {
     display: flex; align-items: center; gap: 10px;
@@ -132,8 +129,23 @@ export class SyncPanel {
     display: flex; flex-direction: column; gap: 2px; align-items: center;
   }
   .pulse .endpoint .codicon-ish { font-size: 15px; line-height: 1; }
+  .track-wrap {
+    flex: 1; position: relative;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .track-label {
+    font-size: 9.5px; font-weight: 600; letter-spacing: 0.5px;
+    color: var(--vscode-sideBar-foreground);
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+    padding: 0 6px;
+    white-space: nowrap;
+    line-height: 1.4;
+    margin-bottom: 3px;
+  }
+  .pulse.ok .track-label { color: var(--vscode-charts-green); }
+  .pulse.off .track-label { color: var(--vscode-charts-gray, #888); }
   .track {
-    flex: 1; height: 3px; border-radius: 2px;
+    width: 100%; height: 3px; border-radius: 2px;
     background: var(--vscode-editorWidget-border, rgba(128,128,128,0.3));
     position: relative; overflow: hidden;
   }
@@ -144,18 +156,6 @@ export class SyncPanel {
     animation: flow 1.6s linear infinite;
     opacity: 0;
   }
-  .track-label {
-    position: absolute; left: 50%; top: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 9.5px; font-weight: 600; letter-spacing: 0.5px;
-    color: var(--vscode-sideBar-foreground);
-    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
-    padding: 0 6px;
-    white-space: nowrap;
-    z-index: 1;
-  }
-  .pulse.ok .track-label { color: var(--vscode-charts-green); }
-  .pulse.off .track-label { color: var(--vscode-charts-gray, #888); }
   .pulse.syncing .track .flow { opacity: 1; }
   .pulse.ok .track::after {
     content: ''; position: absolute; inset: 0;
@@ -305,6 +305,27 @@ export class SyncPanel {
   }
   .dirty-dot.hidden { display: none; }
 
+  /* ── in-panel toast ── */
+  .toast {
+    position: fixed; left: 50%; bottom: 14px;
+    transform: translateX(-50%);
+    max-width: calc(100% - 24px);
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    line-height: 1.45;
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+    border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.3));
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    z-index: 200;
+    animation: toast-in 0.18s ease-out;
+    user-select: text;
+  }
+  .toast.error { border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); }
+  .toast.leaving { animation: toast-out 0.25s ease-in forwards; }
+  @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+  @keyframes toast-out { to { opacity: 0; transform: translate(-50%, 6px); } }
+
   /* ── detail modal ── */
   .modal-mask {
     position: absolute; inset: 0;
@@ -352,11 +373,7 @@ export class SyncPanel {
 </head>
 <body>
   <div class="statusline"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
-  <div class="update-banner hidden" id="updateBanner">
-    <span>新版本 <span class="ver" id="updateVer"></span></span>
-    <button class="secondary" id="updateCopy">复制更新命令</button>
-    <span class="copy-ok hidden" id="copyOk">已复制</span>
-  </div>
+  <div class="toast hidden" id="toast"></div>
 
   <!-- setup: shown when not connected -->
   <div class="setup" id="setup">
@@ -393,7 +410,7 @@ export class SyncPanel {
   <div id="main" class="hidden">
     <div class="pulse" id="pulse">
       <div class="endpoint"><span class="codicon-ish">⌂</span>本机</div>
-      <div class="track"><div class="flow"></div><span class="track-label" id="trackLabel"></span></div>
+      <div class="track-wrap"><span class="track-label" id="trackLabel"></span><div class="track"><div class="flow"></div></div></div>
       <div class="endpoint"><span class="codicon-ish">☁</span>云端</div>
     </div>
 
@@ -515,8 +532,28 @@ export class SyncPanel {
     renderCats();
   }
 
+  let toastTimer = null;
+  let lastToastSeq = 0;
+  let autoCopiedFor = null;
+  function showToast(text, kind) {
+    const el = $('toast');
+    clearTimeout(toastTimer);
+    el.textContent = text;
+    el.className = 'toast' + (kind === 'error' ? ' error' : '');
+    // force reflow so re-triggering restarts the entry animation
+    void el.offsetWidth;
+    toastTimer = setTimeout(() => {
+      el.classList.add('leaving');
+      toastTimer = setTimeout(() => { el.className = 'toast hidden'; }, 260);
+    }, kind === 'error' ? 6000 : 3000);
+  }
+
   function render(state) {
     current = state;
+    if (state.toast && state.toast.seq !== lastToastSeq) {
+      lastToastSeq = state.toast.seq;
+      showToast(state.toast.text, state.toast.kind);
+    }
     const connected = state.gistId && state.status !== 'not-setup';
     $('setup').classList.toggle('hidden', connected);
     $('main').classList.toggle('hidden', !connected);
@@ -542,20 +579,23 @@ export class SyncPanel {
     renderCats();
     if (managing) { /* keep edit mode visuals */ }
 
-    // update banner: show only when a newer version exists
-    const banner = $('updateBanner');
-    if (state.update && state.version && state.update.latest !== state.version) {
-      $('updateVer').textContent = state.update.latest;
-      banner.classList.remove('hidden');
-    } else {
-      banner.classList.add('hidden');
-    }
-
     // check-update button: state-driven so it always resets after a check
     const checkBtn = $('checkUpdateBtn');
     const checking = state.checkingUpdate === true;
     checkBtn.disabled = checking;
     checkBtn.textContent = checking ? '检查中…' : '检查更新';
+
+    // newer version found: copy install command automatically (once per version)
+    if (state.update && state.version && state.update.latest !== state.version) {
+      if (autoCopiedFor !== state.update.latest) {
+        autoCopiedFor = state.update.latest;
+        navigator.clipboard.writeText(state.update.command).then(() => {
+          showToast('发现新版本 ' + state.update.latest + '，更新命令已复制到剪贴板', 'info');
+        });
+      }
+    } else if (state.updateChecked) {
+      showToast('已是最新版本 ' + (state.version || ''), 'info');
+    }
 
     // settings inputs: refill only when not mid-edit (no unsaved changes)
     if (!isDirty()) {
@@ -724,13 +764,6 @@ export class SyncPanel {
   $('checkUpdateBtn').addEventListener('click', () => {
     if (current && current.checkingUpdate) return;
     vscode.postMessage({ type: 'checkUpdate' });
-  });
-  $('updateCopy').addEventListener('click', () => {
-    if (!current.update) return;
-    navigator.clipboard.writeText(current.update.command).then(() => {
-      $('copyOk').classList.remove('hidden');
-      setTimeout(() => $('copyOk').classList.add('hidden'), 2000);
-    });
   });
 
   window.addEventListener('message', (e) => {

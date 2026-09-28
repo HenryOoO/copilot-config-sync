@@ -52,7 +52,7 @@ export function activate(context: vscode.ExtensionContext): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message !== 'passphrase required' && message !== 'cancelled') {
-          vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
+          panel.toast(message, 'error');
         }
       }
     },
@@ -71,10 +71,10 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         await backend.setPassphrase(passphrase);
         await refreshPanel(engine, panel, backend, context);
-        vscode.window.showInformationMessage('Copilot Config Sync: 已连接，可以开始同步了');
+        panel.toast('已连接，可以开始同步了');
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
+        panel.toast(message, 'error');
       }
     },
     async (settings) => {
@@ -94,10 +94,10 @@ export function activate(context: vscode.ExtensionContext): void {
         // if gistId changed, reconnect
         await backend.setGistId(settings.gistId || undefined);
         await refreshPanel(engine, panel, backend, context);
-        vscode.window.showInformationMessage('Copilot Config Sync: 设置已保存');
+        panel.toast('设置已保存');
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        vscode.window.showErrorMessage(`Copilot Config Sync: ${message}`);
+        panel.toast(message, 'error');
       }
     },
     async () => {
@@ -108,17 +108,18 @@ export function activate(context: vscode.ExtensionContext): void {
           version: current,
           update: latest ? { latest: latest.version, command: installCommand(latest.url) } : undefined,
           checkingUpdate: false,
+          updateChecked: true,
         });
         if (!latest) {
-          vscode.window.showInformationMessage('Copilot Config Sync: 无法获取最新版本信息');
+          panel.toast('无法获取最新版本信息', 'error');
         } else if (latest.version === current) {
-          vscode.window.showInformationMessage(`Copilot Config Sync: 已是最新版本 (${current})`);
+          panel.toast(`已是最新版本 (${current})`);
         } else {
-          vscode.window.showInformationMessage(`Copilot Config Sync: 发现新版本 ${latest.version}，可在面板横幅中复制更新命令`);
+          panel.toast(`发现新版本 ${latest.version}，更新命令已复制到剪贴板`);
         }
       } catch {
-        panel.setState({ checkingUpdate: false });
-        vscode.window.showInformationMessage('Copilot Config Sync: 无法获取最新版本信息');
+        panel.setState({ checkingUpdate: false, updateChecked: true });
+        panel.toast('无法获取最新版本信息', 'error');
       }
     }
   );
@@ -159,7 +160,7 @@ async function runSync(engine: SyncEngine, panel: SyncPanel, context: vscode.Ext
       const diff = await engine.diffStatus();
       if (diff.localOnly === 0 && diff.remoteOnly === 0 && diff.conflicts === 0) {
         panel.setState({ status: 'ok', lastSyncAt: new Date().toISOString() });
-        vscode.window.showInformationMessage('Copilot Config Sync: 本机与云端数据一致，无需同步');
+        panel.toast('本机与云端数据一致，无需同步');
         return 'up-to-date';
       }
       let pulled: Awaited<ReturnType<SyncEngine['pull']>> | undefined;
