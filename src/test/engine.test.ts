@@ -6,7 +6,7 @@ import * as path from 'path';
 import { SyncEngine } from '../core/engine';
 import { Bundle, Manifest } from '../core/types';
 import { scanManifest, SourceDir } from '../core/scanner';
-import { sha256 } from '../core/hash';
+import { gzipBase64, sha256 } from '../core/hash';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-engine-'));
@@ -37,13 +37,25 @@ function bundleOf(manifest: Manifest): Bundle {
     categories[cat as keyof Bundle['categories']] = {
       files: data.files.map((f) => ({
         path: f.path,
-        content: Buffer.from('x', 'utf8').toString('base64'),
+        content: gzipBase64(Buffer.from(f.path, 'utf8')),
         hash: f.hash,
         executable: f.executable,
       })),
     };
   }
   return { version: 1, device: manifest.device, updatedAt: manifest.updatedAt, categories };
+}
+
+function bundleWithContent(manifest: Manifest, contents: Record<string, string>): Bundle {
+  const bundle = bundleOf(manifest);
+  for (const payload of Object.values(bundle.categories)) {
+    for (const f of payload.files) {
+      if (contents[f.path] !== undefined) {
+        f.content = gzipBase64(Buffer.from(contents[f.path], 'utf8'));
+      }
+    }
+  }
+  return bundle;
 }
 
 function makeEngine(remote: Bundle | undefined, base: Manifest | undefined, sources: SourceDir[]): SyncEngine {
@@ -127,4 +139,38 @@ test('diffStatus: no remote bundle means initial push', () => {
     assert.strictEqual(diff.localOnly, -1);
     fs.rmSync(root, { recursive: true, force: true });
   });
+});
+
+test('push counts only changed files, not whole bundle', async () => {
+  const root = tmpDir();
+  fs.writeFileSync(path.join(root, 'a.md'), 'same');
+  fs.writeFileSync(path.join(root, 'b.md'), 'same');
+  const sources: SourceDir[] = [{ category: 'skills', dir: root, suffixes: [], recursive: true }];
+  const base = scanManifest(sources, 'd');
+  fs.writeFileSync(path.join(root, 'a.md'), 'changed locally');
+  const engine = makeEngine(bundleOf(base), base, sources);
+  const op = await engine.push();
+  assert.strictEqual(op.files, 1);
+  assert.strictEqual(op.detail.skills, 1);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('pull writes and counts only files differing from local', async () => {
+  const root = tmpDir();
+  fs.writeFileSync(path.join(root, 'a.md'), 'same');
+  fs.writeFileSync(path.join(root, 'b.md'), 'same');
+  const sources: SourceDir[] = [{ category: 'skills', dir: root, suffixes: [], recursive: true }];
+  const base = scanManifest(sources, 'd');
+  const remoteManifest = manifestOf({ 'skills/a.md': 'changed remotely', 'skills/b.md': 'same' });
+  const engine = makeEngine(
+    bundleWithContent(remoteManifest, { 'a.md': 'changed remotely', 'b.md': 'same' }),
+    base,
+    sources
+  );
+  const op = await engine.pull();
+  assert.strictEqual(op.files, 1);
+  assert.strictEqual(op.detail.skills, 1);
+  assert.strictEqual(fs.readFileSync(path.join(root, 'a.md'), 'utf8'), 'changed remotely');
+  assert.strictEqual(fs.readFileSync(path.join(root, 'b.md'), 'utf8'), 'same');
+  fs.rmSync(root, { recursive: true, force: true });
 });

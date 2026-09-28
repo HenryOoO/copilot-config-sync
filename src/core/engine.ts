@@ -195,7 +195,7 @@ export class SyncEngine {
       conflicts.conflicts.length > 0 ||
       conflicts.remoteOnly.length > 0 ||
       conflicts.localDeleted.length > 0;
-    const files = Object.values(bundle.categories).reduce((n, p) => n + (p?.files.length || 0), 0);
+    const files = Object.values(detail).reduce((n, c) => n + c, 0);
     return { result: hadConflicts ? 'conflict-resolved' : 'pushed', files, detail };
   }
 
@@ -244,7 +244,8 @@ export class SyncEngine {
       }
       // backup files that will be overwritten
       const localFiles = indexBy(local.categories[cat]);
-      for (const file of payload.files) {
+      const changed = payload.files.filter((f) => localFiles.get(f.path)?.hash !== f.hash);
+      for (const file of changed) {
         const abs = path.join(baseDir, ...file.path.split('/'));
         if (fs.existsSync(abs)) {
           const rel = path.join(cat, file.path);
@@ -253,7 +254,7 @@ export class SyncEngine {
           fs.copyFileSync(abs, dest);
         }
       }
-      const written = unpackCategory(payload, baseDir);
+      const written = unpackCategory({ files: changed }, baseDir);
       if (written.length > 0) {
         detail[cat] = written.length;
       }

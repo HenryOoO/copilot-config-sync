@@ -93,19 +93,10 @@ export class SyncPanel {
   }
 
   /* ── header ── */
-  .brand { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-  .brand .glyph {
-    width: 22px; height: 22px; border-radius: 6px;
-    display: grid; place-items: center;
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    font-weight: 700; font-size: 12px;
-  }
-  .brand h1 { font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
   .statusline {
     display: flex; align-items: center; gap: 6px;
     font-size: 11.5px; color: var(--vscode-descriptionForeground);
-    margin: 6px 0 12px 30px;
+    margin: 2px 0 12px;
   }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
   .dot.syncing { background: var(--vscode-charts-yellow); animation: blink 1s infinite; }
@@ -116,7 +107,7 @@ export class SyncPanel {
   /* ── update banner ── */
   .update-banner {
     display: flex; align-items: center; gap: 8px;
-    padding: 8px 11px; margin: 0 0 12px 30px;
+    padding: 8px 11px; margin: 0 0 12px;
     border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.3));
     border-radius: 8px;
     font-size: 11.5px;
@@ -157,10 +148,11 @@ export class SyncPanel {
     position: absolute; left: 50%; top: 50%;
     transform: translate(-50%, -50%);
     font-size: 9.5px; font-weight: 600; letter-spacing: 0.5px;
-    color: var(--vscode-descriptionForeground);
-    background: var(--vscode-sideBar-background);
+    color: var(--vscode-sideBar-foreground);
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
     padding: 0 6px;
     white-space: nowrap;
+    z-index: 1;
   }
   .pulse.ok .track-label { color: var(--vscode-charts-green); }
   .pulse.off .track-label { color: var(--vscode-charts-gray, #888); }
@@ -359,10 +351,6 @@ export class SyncPanel {
 </style>
 </head>
 <body>
-  <div class="brand">
-    <div class="glyph">⇄</div>
-    <h1>Copilot Config Sync</h1>
-  </div>
   <div class="statusline"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
   <div class="update-banner hidden" id="updateBanner">
     <span>新版本 <span class="ver" id="updateVer"></span></span>

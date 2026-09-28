@@ -178,16 +178,12 @@ async function runSync(engine: SyncEngine, panel: SyncPanel, context: vscode.Ext
         pushed = await engine.push();
         result = pushed.result;
       }
-      const detail: Record<string, number> = {};
-      for (const [cat, n] of Object.entries(pulled?.detail || {})) {
-        detail[cat] = (detail[cat] || 0) - n;
+      if (pulled && pulled.files > 0) {
+        recordHistory(context, panel, 'pull', pulled.files, pulled.detail);
       }
-      for (const [cat, n] of Object.entries(pushed?.detail || {})) {
-        detail[cat] = (detail[cat] || 0) + n;
+      if (pushed && pushed.files > 0) {
+        recordHistory(context, panel, 'push', pushed.files, pushed.detail);
       }
-      const files = (pulled?.files || 0) + (pushed?.files || 0);
-      const direction = (pulled?.files || 0) > (pushed?.files || 0) ? 'pull' : 'push';
-      recordHistory(context, panel, direction, files, Object.keys(detail).length ? detail : undefined);
     }
     panel.setState({ status: 'ok', lastSyncAt: new Date().toISOString() });
     return result;
