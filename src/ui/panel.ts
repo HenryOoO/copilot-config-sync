@@ -12,6 +12,7 @@ export interface PanelState {
   history: Array<{ category: string; files: number; direction: 'up' | 'down'; at: string; detail?: Record<string, number> }>;
   version?: string;
   update?: { latest: string; command: string };
+  checkingUpdate?: boolean;
 }
 
 export class SyncPanel {
@@ -61,7 +62,8 @@ export class SyncPanel {
           await this.onSaveSettings(msg.settings);
           break;
         case 'checkUpdate':
-          await this.onCheckUpdate();
+          this.setState({ checkingUpdate: true });
+          this.onCheckUpdate();
           break;
         case 'ready':
           this.postState();
@@ -573,6 +575,12 @@ export class SyncPanel {
       banner.classList.add('hidden');
     }
 
+    // check-update button: state-driven so it always resets after a check
+    const checkBtn = $('checkUpdateBtn');
+    const checking = state.checkingUpdate === true;
+    checkBtn.disabled = checking;
+    checkBtn.textContent = checking ? '检查中…' : '检查更新';
+
     // settings inputs: refill only when not mid-edit (no unsaved changes)
     if (!isDirty()) {
       fillSettings();
@@ -623,10 +631,13 @@ export class SyncPanel {
     const rows = $('modalRows');
     const detail = h.detail && Object.keys(h.detail).length
       ? h.detail
-      : { [h.category]: h.files };
-    rows.innerHTML = Object.entries(detail).map(([cat, n]) =>
-      '<div class="row"><span class="name">' + label(cat) + '</span><span class="n">' + n + ' 项</span></div>'
-    ).join('');
+      : (h.files > 0 ? { [h.category]: h.files } : {});
+    const entries = Object.entries(detail);
+    rows.innerHTML = entries.length
+      ? entries.map(([cat, n]) =>
+          '<div class="row"><span class="name">' + label(cat) + '</span><span class="n">' + n + ' 项</span></div>'
+        ).join('')
+      : '<div class="empty">无变更</div>';
     $('modalMask').classList.remove('hidden');
     $('modalClose').focus();
   }
@@ -737,8 +748,7 @@ export class SyncPanel {
   $('pushBtn').addEventListener('click', () => vscode.postMessage({ type: 'push' }));
   $('pullBtn').addEventListener('click', () => vscode.postMessage({ type: 'pull' }));
   $('checkUpdateBtn').addEventListener('click', () => {
-    $('checkUpdateBtn').textContent = '检查中…';
-    $('checkUpdateBtn').disabled = true;
+    if (current && current.checkingUpdate) return;
     vscode.postMessage({ type: 'checkUpdate' });
   });
   $('updateCopy').addEventListener('click', () => {

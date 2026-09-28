@@ -26,7 +26,9 @@ jobs:
         run: npx tsc -p ./
 
       - name: Run tests
-        run: node --test out/test/crypto.test.js out/test/scanner.test.js
+        run: npm test
+        env:
+          NODE_PATH: out/test-mock
 
       - name: Bump version to 0.1.${{ github.run_number }}
         run: npm version 0.1.${{ github.run_number }} --no-git-tag-version

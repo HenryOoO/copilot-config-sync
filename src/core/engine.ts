@@ -4,7 +4,6 @@ import * as vscode from 'vscode';
 import {
   Bundle,
   CategoryId,
-  CategoryManifest,
   ConflictFile,
   ConflictSet,
   Manifest,
@@ -170,7 +169,11 @@ export class SyncEngine {
   }
 
   /** Push local state to the remote bundle, resolving conflicts via UI when needed. */
-  async push(): Promise<{ result: 'pushed' | 'conflict-resolved' | 'cancelled'; files: number }> {
+  async push(): Promise<{
+    result: 'pushed' | 'conflict-resolved' | 'cancelled';
+    files: number;
+    detail: Record<string, number>;
+  }> {
     const local = this.scanLocal();
     const remoteBundle = await this.readRemoteBundle();
     const remoteManifest = remoteBundle ? manifestFromBundle(remoteBundle) : undefined;
@@ -180,11 +183,12 @@ export class SyncEngine {
     if (remoteManifest && (conflicts.conflicts.length > 0 || conflicts.remoteOnly.length > 0 || conflicts.localDeleted.length > 0)) {
       const action = await this.resolveConflicts(conflicts, local, remoteBundle!);
       if (action === 'cancelled') {
-        return { result: 'cancelled', files: 0 };
+        return { result: 'cancelled', files: 0, detail: {} };
       }
     }
 
     const bundle = await this.buildBundle(local);
+    const detail = bundleDiffDetail(remoteBundle, bundle);
     await this.opts.backend.write(bundle);
     await this.saveBase(local);
     const hadConflicts =
@@ -192,11 +196,15 @@ export class SyncEngine {
       conflicts.remoteOnly.length > 0 ||
       conflicts.localDeleted.length > 0;
     const files = Object.values(bundle.categories).reduce((n, p) => n + (p?.files.length || 0), 0);
-    return { result: hadConflicts ? 'conflict-resolved' : 'pushed', files };
+    return { result: hadConflicts ? 'conflict-resolved' : 'pushed', files, detail };
   }
 
   /** Pull remote state to disk, backing up overwritten files. */
-  async pull(): Promise<{ result: 'pulled' | 'up-to-date' | 'cancelled'; files: number }> {
+  async pull(): Promise<{
+    result: 'pulled' | 'up-to-date' | 'cancelled';
+    files: number;
+    detail: Record<string, number>;
+  }> {
     const remoteBundle = await this.readRemoteBundle();
     if (!remoteBundle) {
       throw new Error('Nothing has been pushed yet');
@@ -210,17 +218,18 @@ export class SyncEngine {
       conflicts.localDeleted.length === 0 &&
       conflicts.conflicts.length === 0
     ) {
-      return { result: 'up-to-date', files: 0 };
+      return { result: 'up-to-date', files: 0, detail: {} };
     }
     if (conflicts.conflicts.length > 0) {
       const action = await this.resolveConflicts(conflicts, local, remoteBundle);
       if (action === 'cancelled') {
-        return { result: 'cancelled', files: 0 };
+        return { result: 'cancelled', files: 0, detail: {} };
       }
     }
     const sources = this.opts.sources || defaultSources();
     const backupDir = path.join(this.opts.globalStorageUri.fsPath, 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
     let restored = 0;
+    const detail: Record<string, number> = {};
     for (const [category, payload] of Object.entries(remoteBundle.categories)) {
       if (!payload) {
         continue;
@@ -244,10 +253,63 @@ export class SyncEngine {
           fs.copyFileSync(abs, dest);
         }
       }
-      restored += unpackCategory(payload, baseDir).length;
+      const written = unpackCategory(payload, baseDir);
+      if (written.length > 0) {
+        detail[cat] = written.length;
+      }
+      restored += written.length;
     }
     await this.saveBase(remoteManifest);
-    return { result: 'pulled', files: restored };
+    return { result: 'pulled', files: restored, detail };
+  }
+
+  /**
+   * Read-only three-way comparison of local vs remote, without touching disk.
+   * Used by "sync now" to decide direction automatically.
+   */
+  async diffStatus(): Promise<{
+    localOnly: number;
+    remoteOnly: number;
+    conflicts: number;
+    localDeleted: number;
+    remoteDeleted: number;
+    detail: Record<string, number>;
+  }> {
+    const local = this.scanLocal();
+    const remoteBundle = await this.readRemoteBundle();
+    if (!remoteBundle) {
+      return { localOnly: -1, remoteOnly: 0, conflicts: 0, localDeleted: 0, remoteDeleted: 0, detail: {} };
+    }
+    const remoteManifest = manifestFromBundle(remoteBundle);
+    const base = await this.loadBase();
+    const conflicts = this.computeConflicts(local, remoteManifest, base);
+    const detail: Record<string, number> = {};
+    const bump = (file: ConflictFile) => {
+      detail[file.category] = (detail[file.category] || 0) + 1;
+    };
+    for (const f of conflicts.localOnly) {
+      bump(f);
+    }
+    for (const f of conflicts.remoteOnly) {
+      bump(f);
+    }
+    for (const f of conflicts.conflicts) {
+      bump(f);
+    }
+    for (const f of conflicts.localDeleted) {
+      bump(f);
+    }
+    for (const f of conflicts.remoteDeleted) {
+      bump(f);
+    }
+    return {
+      localOnly: conflicts.localOnly.length + conflicts.remoteDeleted.length,
+      remoteOnly: conflicts.remoteOnly.length + conflicts.localDeleted.length,
+      conflicts: conflicts.conflicts.length,
+      localDeleted: conflicts.localDeleted.length,
+      remoteDeleted: conflicts.remoteDeleted.length,
+      detail,
+    };
   }
 
   private async buildBundle(local: Manifest): Promise<Bundle> {
@@ -372,7 +434,7 @@ export class SyncEngine {
   }
 }
 
-function indexBy(cat: CategoryManifest | undefined): Map<string, { hash: string }> {
+function indexBy<T extends { path: string; hash: string }>(cat: { files: T[] } | undefined): Map<string, { hash: string }> {
   const map = new Map<string, { hash: string }>();
   if (cat) {
     for (const f of cat.files) {
@@ -410,4 +472,30 @@ function dropFromPayload(bundle: Bundle, category: CategoryId, path: string): vo
   if (payload) {
     payload.files = payload.files.filter((f) => f.path !== path);
   }
+}
+
+/** Per-category count of files whose content differs between two bundles. */
+function bundleDiffDetail(before: Bundle | undefined, after: Bundle): Record<string, number> {
+  const detail: Record<string, number> = {};
+  const categories = new Set<string>([
+    ...Object.keys(before?.categories || {}),
+    ...Object.keys(after.categories),
+  ]);
+  for (const category of categories) {
+    const cat = category as CategoryId;
+    const beforeFiles = indexBy(before?.categories[cat]);
+    const afterFiles = indexBy(after.categories[cat]);
+    let changed = 0;
+    for (const p of new Set<string>([...beforeFiles.keys(), ...afterFiles.keys()])) {
+      const b = beforeFiles.get(p)?.hash;
+      const a = afterFiles.get(p)?.hash;
+      if (b !== a) {
+        changed += 1;
+      }
+    }
+    if (changed > 0) {
+      detail[cat] = changed;
+    }
+  }
+  return detail;
 }

@@ -57,7 +57,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         await runOp(panel, '推送中…', async () => {
           const r = await engine.push();
-          recordHistory(panel, 'push', r.files);
+          recordHistory(panel, 'push', r.files, r.detail);
           await refreshPanel(engine, panel, backend, context);
         });
       } catch (err) {
@@ -71,7 +71,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         await runOp(panel, '拉取中…', async () => {
           const r = await engine.pull();
-          recordHistory(panel, 'pull', r.files);
+          recordHistory(panel, 'pull', r.files, r.detail);
           await refreshPanel(engine, panel, backend, context);
         });
       } catch (err) {
@@ -132,6 +132,7 @@ export function activate(context: vscode.ExtensionContext): void {
         panel.setState({
           version: current,
           update: latest ? { latest, command: UPDATE_COMMAND } : undefined,
+          checkingUpdate: false,
         });
         if (!latest) {
           vscode.window.showInformationMessage('Copilot Config Sync: 无法获取最新版本信息');
@@ -139,6 +140,7 @@ export function activate(context: vscode.ExtensionContext): void {
           vscode.window.showInformationMessage(`Copilot Config Sync: 已是最新版本 (${current})`);
         }
       } catch {
+        panel.setState({ checkingUpdate: false });
         vscode.window.showInformationMessage('Copilot Config Sync: 无法获取最新版本信息');
       }
     }
@@ -174,23 +176,41 @@ async function runSync(engine: SyncEngine, panel: SyncPanel): Promise<string> {
       }
       const op = choice.value === 'push' ? await engine.push() : await engine.pull();
       result = op.result;
-      recordHistory(panel, choice.value, op.files);
+      recordHistory(panel, choice.value, op.files, op.detail);
     } else {
-      const before = categoryCounts(engine);
-      const pulled = await engine.pull();
-      const pushed = await engine.push();
-      result = pushed.result;
-      const after = categoryCounts(engine);
-      // one aggregated entry per sync: direction by net effect
-      const files = (pulled.files || 0) + (pushed.files || 0);
-      const detail: Record<string, number> = {};
-      for (const cat of Object.keys({ ...before, ...after })) {
-        const delta = (after[cat] || 0) - (before[cat] || 0);
-        if (delta !== 0) {
-          detail[cat] = delta;
-        }
+      // decide direction automatically from a three-way diff
+      const diff = await engine.diffStatus();
+      if (diff.localOnly === 0 && diff.remoteOnly === 0 && diff.conflicts === 0) {
+        panel.setState({ status: 'ok', lastSyncAt: new Date().toISOString() });
+        vscode.window.showInformationMessage('Copilot Config Sync: 本机与云端数据一致，无需同步');
+        return 'up-to-date';
       }
-      recordHistory(panel, 'push', files, Object.keys(detail).length ? detail : undefined);
+      let pulled: Awaited<ReturnType<SyncEngine['pull']>> | undefined;
+      let pushed: Awaited<ReturnType<SyncEngine['push']>> | undefined;
+      if (diff.remoteOnly > 0 && diff.localOnly === 0 && diff.conflicts === 0) {
+        // remote is newer: pull only
+        pulled = await engine.pull();
+        result = pulled.result;
+      } else if (diff.localOnly > 0 && diff.remoteOnly === 0 && diff.conflicts === 0) {
+        // local is newer: push only
+        pushed = await engine.push();
+        result = pushed.result;
+      } else {
+        // both sides changed (or conflicts): pull then push
+        pulled = await engine.pull();
+        pushed = await engine.push();
+        result = pushed.result;
+      }
+      const detail: Record<string, number> = {};
+      for (const [cat, n] of Object.entries(pulled?.detail || {})) {
+        detail[cat] = (detail[cat] || 0) - n;
+      }
+      for (const [cat, n] of Object.entries(pushed?.detail || {})) {
+        detail[cat] = (detail[cat] || 0) + n;
+      }
+      const files = (pulled?.files || 0) + (pushed?.files || 0);
+      const direction = (pulled?.files || 0) > (pushed?.files || 0) ? 'pull' : 'push';
+      recordHistory(panel, direction, files, Object.keys(detail).length ? detail : undefined);
     }
     panel.setState({ status: 'ok', lastSyncAt: new Date().toISOString() });
     return result;
@@ -217,16 +237,6 @@ function recordHistory(
   panel.setState({
     history: [entry, ...current].slice(0, 50),
   });
-}
-
-/** Per-category file counts from the current manifest. */
-function categoryCounts(engine: SyncEngine): Record<string, number> {
-  const manifest = scanManifest(defaultSources(), engine['opts'].deviceName);
-  const out: Record<string, number> = {};
-  for (const [cat, data] of Object.entries(manifest.categories)) {
-    out[cat] = data.files.length;
-  }
-  return out;
 }
 
 async function runOp(panel: SyncPanel, title: string, fn: () => Promise<unknown>): Promise<void> {
@@ -270,7 +280,11 @@ export function deactivate(): void {}
 
 /** Fetch the latest published VSIX version from the GitHub release redirect. */
 async function fetchLatestVersion(): Promise<string | undefined> {
-  const res = await fetch(`${RELEASE_URL}/copilot-config-sync-latest.vsix`, { method: 'HEAD', redirect: 'follow' });
+  const res = await fetch(`${RELEASE_URL}/copilot-config-sync-latest.vsix`, {
+    method: 'HEAD',
+    redirect: 'follow',
+    signal: AbortSignal.timeout(10_000),
+  });
   const match = /copilot-config-sync-(\d+\.\d+\.\d+)\.vsix/.exec(res.url);
   return match ? match[1] : undefined;
 }
