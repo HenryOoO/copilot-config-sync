@@ -578,7 +578,6 @@ export class SyncPanel {
     }
 
     const dot = $('dot'), text = $('statusText'), pulse = $('pulse');
-    $('verText').textContent = state.version ? 'v' + state.version : '';
     dot.className = 'dot';
     pulse.className = 'pulse';
     const busy = state.status === 'syncing';
