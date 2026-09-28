@@ -133,6 +133,32 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   void refreshPanel(engine, panel, backend, context);
+  void autoCheckUpdate(context, panel);
+}
+
+/** Check for updates once on startup, throttled to once per 24h. Toasts only when outdated. */
+async function autoCheckUpdate(context: vscode.ExtensionContext, panel: SyncPanel): Promise<void> {
+  const KEY = 'copilotConfigSync.lastUpdateCheck';
+  const now = Date.now();
+  const last = context.globalState.get<number>(KEY, 0);
+  if (now - last < 24 * 60 * 60 * 1000) {
+    return;
+  }
+  await context.globalState.update(KEY, now);
+  try {
+    const latest = await fetchLatestVersion();
+    const current = context.extension.packageJSON.version as string;
+    panel.setState({
+      version: current,
+      update: latest ? { latest: latest.version, command: installCommand(latest.url) } : undefined,
+      updateChecked: true,
+    });
+    if (latest && latest.version !== current) {
+      panel.toast(`发现新版本 ${latest.version}，更新命令已复制到剪贴板`);
+    }
+  } catch {
+    // silent: auto check should not bother the user on failure
+  }
 }
 
 async function runSync(engine: SyncEngine, panel: SyncPanel, context: vscode.ExtensionContext): Promise<string> {

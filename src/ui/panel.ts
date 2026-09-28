@@ -158,6 +158,10 @@ export class SyncPanel {
   }
   .ver-btn:hover { color: var(--vscode-sideBar-foreground); text-decoration: underline; filter: none; }
   .ver-btn:disabled { cursor: default; text-decoration: none; opacity: 0.6; }
+  .footer {
+    display: flex; justify-content: center;
+    margin-top: 20px;
+  }
   .track {
     width: 100%; height: 3px; border-radius: 2px;
     background: var(--vscode-editorWidget-border, rgba(128,128,128,0.3));
@@ -424,7 +428,7 @@ export class SyncPanel {
   <div id="main" class="hidden">
     <div class="pulse" id="pulse">
       <div class="endpoint"><span class="codicon-ish">⌂</span>本机</div>
-      <div class="track-wrap"><div class="label-row"><span class="track-label" id="trackLabel"></span><button class="ver-btn" id="verBtn" title="点击检查更新"></button></div><div class="track"><div class="flow"></div></div></div>
+      <div class="track-wrap"><div class="label-row"><span class="track-label" id="trackLabel"></span></div><div class="track"><div class="flow"></div></div></div>
       <div class="endpoint"><span class="codicon-ish">☁</span>云端</div>
     </div>
 
@@ -487,6 +491,8 @@ export class SyncPanel {
       </div>
       <div class="error" id="settingsError"></div>
     </div>
+
+    <div class="footer"><button class="ver-btn" id="verBtn" title="点击检查更新"></button></div>
   </div>
 
 <script nonce="${nonce}">
