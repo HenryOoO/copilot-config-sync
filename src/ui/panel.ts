@@ -107,6 +107,11 @@ export class SyncPanel {
     font-size: 11.5px; color: var(--vscode-descriptionForeground);
     margin: 2px 0 12px;
   }
+  .statusline .ver {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.75;
+  }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-green); flex: none; }
   .dot.syncing { background: var(--vscode-charts-yellow); animation: blink 1s infinite; }
   .dot.warn { background: var(--vscode-charts-orange); }
@@ -372,7 +377,7 @@ export class SyncPanel {
 </style>
 </head>
 <body>
-  <div class="statusline"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
+  <div class="statusline"><span class="dot" id="dot"></span><span id="statusText">…</span><span class="ver" id="verText"></span></div>
   <div class="toast hidden" id="toast"></div>
 
   <!-- setup: shown when not connected -->
@@ -444,32 +449,34 @@ export class SyncPanel {
     <div class="section-title" style="margin-top:16px">
       <span>全局设置</span>
       <span id="settingsDirty" class="dirty-dot hidden" title="有未保存的修改"></span>
+      <span id="settingsArea">
+        <button class="manage" id="settingsEdit">修改设置</button>
+        <button class="manage hidden" id="settingsSave">保存修改</button>
+        <button class="manage hidden" id="settingsCancel">取消</button>
+      </span>
     </div>
     <div class="settings" id="settings">
       <div class="field">
         <label>Gist 名称</label>
-        <input type="text" id="setGistName" placeholder="copilot-config-sync">
+        <input type="text" id="setGistName" placeholder="copilot-config-sync" disabled>
         <div class="sub">用于自动识别你的同步仓库（新建时也用这个名称）</div>
       </div>
       <div class="field">
         <label>Gist ID</label>
-        <input type="text" id="setGistId" placeholder="留空则按名称自动查找/创建">
+        <input type="text" id="setGistId" placeholder="留空则按名称自动查找/创建" disabled>
         <div class="sub">显式指定后所有机器强制连到这一个 gist</div>
       </div>
       <div class="field">
         <label>本机设备名</label>
-        <input type="text" id="setDeviceName" placeholder="默认为主机名">
+        <input type="text" id="setDeviceName" placeholder="默认为主机名" disabled>
         <div class="sub">记录在同步清单里，用于区分哪台机器推送的</div>
       </div>
       <div class="field">
         <label>同步口令</label>
-        <input type="password" id="setPassphrase" placeholder="已设置 — 输入新值可更换">
+        <input type="password" id="setPassphrase" placeholder="已设置 — 输入新值可更换" disabled>
         <div class="sub">加密敏感字段。更换口令后，其他机器需用新口令才能解密。</div>
       </div>
       <div class="error" id="settingsError"></div>
-      <div class="actions" style="margin-bottom:8px">
-        <button class="primary" id="settingsSave">保存设置</button>
-      </div>
       <div class="actions" style="margin-bottom:0">
         <button class="secondary" id="checkUpdateBtn" style="flex:1">检查更新</button>
       </div>
@@ -561,10 +568,12 @@ export class SyncPanel {
     if (!connected) {
       $('statusText').textContent = '未设置 — 填写下方信息开始';
       $('dot').className = 'dot off';
+      $('verText').textContent = state.version ? 'v' + state.version : '';
       return;
     }
 
     const dot = $('dot'), text = $('statusText'), pulse = $('pulse');
+    $('verText').textContent = state.version ? 'v' + state.version : '';
     dot.className = 'dot';
     pulse.className = 'pulse';
     const busy = state.status === 'syncing';
@@ -598,7 +607,7 @@ export class SyncPanel {
     }
 
     // settings inputs: refill only when not mid-edit (no unsaved changes)
-    if (!isDirty()) {
+    if (!editingSettings) {
       fillSettings();
     }
 
@@ -688,7 +697,8 @@ export class SyncPanel {
     $('setupError').textContent = '';
     vscode.postMessage({ type: 'setup', mode, gistName, gistId, passphrase: pass });
   });
-  // global settings: always expanded, dirty dot on change
+  // global settings: read-only until 修改设置, dirty dot on change
+  let editingSettings = false;
   let savedSnapshot = {};
   function snapshotSettings() {
     return {
@@ -699,10 +709,26 @@ export class SyncPanel {
     };
   }
   function isDirty() {
-    return JSON.stringify(snapshotSettings()) !== JSON.stringify(savedSnapshot);
+    return editingSettings && JSON.stringify(snapshotSettings()) !== JSON.stringify(savedSnapshot);
   }
   function refreshDirty() {
     $('settingsDirty').classList.toggle('hidden', !isDirty());
+  }
+  function setEditingSettings(on) {
+    editingSettings = on;
+    $('settingsEdit').classList.toggle('hidden', on);
+    $('settingsSave').classList.toggle('hidden', !on);
+    $('settingsCancel').classList.toggle('hidden', !on);
+    ['setGistName', 'setGistId', 'setDeviceName', 'setPassphrase'].forEach((id) => {
+      $(id).disabled = !on;
+    });
+    if (on) {
+      $('setGistName').focus();
+    } else {
+      $('settingsError').textContent = '';
+      fillSettings();
+    }
+    refreshDirty();
   }
   function fillSettings() {
     $('setGistName').value = current.gistName || 'copilot-config-sync';
@@ -716,6 +742,8 @@ export class SyncPanel {
   ['setGistName', 'setGistId', 'setDeviceName', 'setPassphrase'].forEach((id) => {
     $(id).addEventListener('input', refreshDirty);
   });
+  $('settingsEdit').addEventListener('click', () => setEditingSettings(true));
+  $('settingsCancel').addEventListener('click', () => setEditingSettings(false));
   $('modalClose').addEventListener('click', () => $('modalMask').classList.add('hidden'));
   $('modalX').addEventListener('click', () => $('modalMask').classList.add('hidden'));
   $('modalMask').addEventListener('click', (e) => {
@@ -739,6 +767,7 @@ export class SyncPanel {
     $('settingsError').textContent = '';
     savedSnapshot = snapshotSettings();
     refreshDirty();
+    setEditingSettings(false);
     vscode.postMessage({
       type: 'saveSettings',
       settings: {
