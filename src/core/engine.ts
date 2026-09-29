@@ -55,8 +55,12 @@ function makeResolver(sources: SourceDir[]): (category: CategoryId, rel: string)
 
 function categoryBaseDir(sources: SourceDir[], category: CategoryId): string | undefined {
   // for unpacking we need a base dir per category; prefer the first source of that category
-  const src = sources.find((s) => s.category === category && !s.dir.endsWith('.json'));
-  return src?.dir;
+  const src = sources.find((s) => s.category === category);
+  if (!src) {
+    return undefined;
+  }
+  // single-file sources (mcp.json, chatLanguageModels.json) unpack into their parent dir
+  return src.dir.endsWith('.json') ? path.dirname(src.dir) : src.dir;
 }
 
 export class SyncEngine {
@@ -402,13 +406,22 @@ export class SyncEngine {
 
   private async writeRemoteFileToLocal(bundle: Bundle, file: ConflictFile): Promise<void> {
     const sources = this.opts.sources || defaultSources();
-    const baseDir = categoryBaseDir(sources, file.category);
     const payload = bundle.categories[file.category];
-    if (!baseDir || !payload) {
+    if (!payload) {
       return;
     }
     const entry = payload.files.find((f) => f.path === file.path);
-    if (entry) {
+    if (!entry) {
+      return;
+    }
+    // resolve the exact target so single-file sources land on their own path
+    const abs = makeResolver(sources)(file.category, file.path);
+    if (abs) {
+      unpackCategory({ files: [entry] }, path.dirname(abs));
+      return;
+    }
+    const baseDir = categoryBaseDir(sources, file.category);
+    if (baseDir) {
       unpackCategory({ files: [entry] }, baseDir);
     }
   }

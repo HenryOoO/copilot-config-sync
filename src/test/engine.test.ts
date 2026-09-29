@@ -155,6 +155,25 @@ test('push counts only changed files, not whole bundle', async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('pull writes single-file sources (mcp.json / chatLanguageModels.json)', async () => {
+  const root = tmpDir();
+  const file = path.join(root, 'chatLanguageModels.json');
+  fs.writeFileSync(file, '[]');
+  const sources: SourceDir[] = [{ category: 'lmProviders', dir: file, suffixes: [], recursive: false }];
+  const base = scanManifest(sources, 'd');
+  const remoteManifest = manifestOf({ 'lmProviders/chatLanguageModels.json': '[{"name":"remote"}]' });
+  const engine = makeEngine(
+    bundleWithContent(remoteManifest, { 'chatLanguageModels.json': '[{"name":"remote"}]' }),
+    base,
+    sources
+  );
+  const op = await engine.pull();
+  assert.strictEqual(op.files, 1);
+  assert.strictEqual(op.detail.lmProviders, 1);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), '[{"name":"remote"}]');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('pull writes and counts only files differing from local', async () => {
   const root = tmpDir();
   fs.writeFileSync(path.join(root, 'a.md'), 'same');
