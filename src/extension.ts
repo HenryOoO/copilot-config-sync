@@ -240,7 +240,9 @@ async function runSync(engine: SyncEngine, panel: SyncPanel, context: vscode.Ext
       // decide direction automatically from a three-way diff
       const diff = await engine.diffStatus();
       if (diff.localOnly === 0 && diff.remoteOnly === 0 && diff.conflicts === 0) {
-        panel.setState({ status: 'ok', lastSyncAt: new Date().toISOString() });
+        // nothing changed: don't refresh lastSyncAt so the status line
+        // keeps showing when the last real sync happened
+        panel.setState({ status: 'ok' });
         panel.toast('本机与云端数据一致，无需同步');
         return 'up-to-date';
       }

@@ -665,6 +665,14 @@ export class SyncPanel {
   let histItems = [];
   let histShown = 0;
 
+  // total = sum of per-category detail; falls back to h.files for legacy entries without detail
+  function entryTotal(h) {
+    if (h.detail && Object.keys(h.detail).length) {
+      return Object.values(h.detail).reduce((n, c) => n + c, 0);
+    }
+    return h.files;
+  }
+
   function renderMoreHistory() {
     const hist = $('history');
     const batch = histItems.slice(histShown, histShown + HIST_BATCH);
@@ -676,8 +684,8 @@ export class SyncPanel {
       div.innerHTML =
         '<span class="arrow">' + (h.direction === 'up' ? '↑' : '↓') + '</span>' +
         '<span class="cat-name">' + label(h.category) + '</span>' +
-        '<span>' + h.files + ' 项</span>' +
-        '<span class="time">' + relTime(h.at) + '</span>';
+        '<span>' + entryTotal(h) + ' 项</span>' +
+        '<span class="time" data-at="' + h.at + '">' + relTime(h.at) + '</span>';
       const idx = histShown + i;
       div.addEventListener('click', () => openDetail(idx));
       div.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') openDetail(idx); });
@@ -690,7 +698,7 @@ export class SyncPanel {
     const h = histItems[idx];
     if (!h) return;
     $('modalTitle').textContent = (h.direction === 'up' ? '推送' : '拉取') + '详情';
-    $('modalSub').textContent = relTime(h.at) + ' · 共 ' + h.files + ' 项';
+    $('modalSub').textContent = relTime(h.at) + ' · 共 ' + entryTotal(h) + ' 项';
     const rows = $('modalRows');
     const detail = h.detail && Object.keys(h.detail).length
       ? h.detail
@@ -797,6 +805,24 @@ export class SyncPanel {
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 20 && histShown < histItems.length) {
       renderMoreHistory();
     }
+  });
+
+  // keep relative times fresh: re-render only time texts, not the whole list
+  function refreshTimes() {
+    document.querySelectorAll('.time[data-at]').forEach((el) => {
+      el.textContent = relTime(el.getAttribute('data-at'));
+    });
+    if (current && current.lastSyncAt && !$('statusText').textContent.includes('同步中')) {
+      // status line shows "已同步 · X 前" only when not mid-sync
+      const dot = $('dot');
+      if (dot.className === 'dot') {
+        $('statusText').textContent = '已同步 · ' + relTime(current.lastSyncAt);
+      }
+    }
+  }
+  setInterval(refreshTimes, 30_000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshTimes();
   });
 
   $('settingsSave').addEventListener('click', () => {
