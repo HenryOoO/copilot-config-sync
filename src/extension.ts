@@ -160,18 +160,15 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!update) {
         return;
       }
-      panel.setState({ updating: true });
+      // clear confirmUpdateFor so the modal stays closed during install
+      panel.setState({ updating: true, confirmUpdateFor: undefined });
       const ok = await installVsix(update.command.match(/https:\S+\.vsix/)?.[0] || '');
       panel.setState({ updating: false });
       if (ok) {
-        panel.toast(`已安装 ${update.latest}，重载窗口后生效`);
-        const choice = await vscode.window.showInformationMessage(
-          `Copilot Config Sync: 已安装 ${update.latest}，重载窗口后生效`,
-          '立即重载'
-        );
-        if (choice === '立即重载') {
-          await vscode.commands.executeCommand('workbench.action.reloadWindow');
-        }
+        panel.toast(`已安装 ${update.latest}，即将自动重载窗口…`);
+        setTimeout(() => {
+          void vscode.commands.executeCommand('workbench.action.reloadWindow');
+        }, 1500);
       } else {
         panel.toast('自动更新失败，安装命令已复制到剪贴板，可在终端手动执行', 'error');
         await vscode.env.clipboard.writeText(update.command);
