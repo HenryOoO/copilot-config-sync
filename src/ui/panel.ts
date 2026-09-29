@@ -19,6 +19,8 @@ export interface PanelState {
   updateChecked?: boolean;
   /** When set, the panel shows an "install update?" confirmation modal. */
   confirmUpdateFor?: string;
+  /** When true, the panel shows a "reload window now?" modal after an install. */
+  reloadPrompt?: boolean;
   /** Transient in-panel toast; replaces native bottom-right messages. */
   toast?: { text: string; kind: 'info' | 'error'; seq: number };
 }
@@ -34,7 +36,8 @@ export class SyncPanel {
     private readonly onSetup: (mode: 'create' | 'connect', gistName: string, gistId: string, passphrase: string) => Promise<void>,
     private readonly onSaveSettings: (settings: { gistName: string; gistId: string; deviceName: string; passphrase?: string }) => Promise<void>,
     private readonly onCheckUpdate: () => Promise<void>,
-    private readonly onInstallUpdate: () => Promise<void>
+    private readonly onInstallUpdate: () => Promise<void>,
+    private readonly onReloadWindow: () => void
   ) {
     this.state = {
       status: 'idle',
@@ -69,6 +72,9 @@ export class SyncPanel {
         case 'installUpdate':
           this.onInstallUpdate();
           break;
+        case 'reloadWindow':
+          this.onReloadWindow();
+          break;
         case 'ready':
           this.postState();
           break;
@@ -89,6 +95,11 @@ export class SyncPanel {
   /** Ask the user to confirm installing the pending update (in-panel modal). */
   confirmUpdate(latest: string): void {
     this.setState({ confirmUpdateFor: latest });
+  }
+
+  /** Ask the user to reload the window so the freshly installed update takes effect. */
+  promptReload(): void {
+    this.setState({ reloadPrompt: true });
   }
 
   private postState(): void {
@@ -490,6 +501,17 @@ export class SyncPanel {
       </div>
     </div>
 
+    <div class="modal-mask hidden" id="reloadMask">
+      <div class="modal" role="alertdialog" aria-modal="true">
+        <h2>更新已安装</h2>
+        <div class="sub" id="reloadMsg"></div>
+        <div class="btn-row">
+          <button class="secondary" id="reloadLater">稍后</button>
+          <button class="primary" id="reloadNow">立即重载</button>
+        </div>
+      </div>
+    </div>
+
     <div class="section-title" style="margin-top:16px">
       <span>全局设置</span>
       <span id="settingsDirty" class="dirty-dot hidden" title="有未保存的修改"></span>
@@ -642,6 +664,15 @@ export class SyncPanel {
       updateMask.classList.remove('hidden');
     } else {
       updateMask.classList.add('hidden');
+    }
+
+    // reload prompt modal, shown after a successful install
+    const reloadMask = $('reloadMask');
+    if (state.reloadPrompt) {
+      $('reloadMsg').textContent = '新版本已安装，重载窗口后生效。';
+      reloadMask.classList.remove('hidden');
+    } else {
+      reloadMask.classList.add('hidden');
     }
 
     // settings inputs: refill only when not mid-edit (no unsaved changes)
@@ -871,6 +902,15 @@ export class SyncPanel {
       $('updateMask').classList.add('hidden');
       if (current) current.confirmUpdateFor = null;
     }
+  });
+  $('reloadNow').addEventListener('click', () => {
+    $('reloadMask').classList.add('hidden');
+    if (current) current.reloadPrompt = false;
+    vscode.postMessage({ type: 'reloadWindow' });
+  });
+  $('reloadLater').addEventListener('click', () => {
+    $('reloadMask').classList.add('hidden');
+    if (current) current.reloadPrompt = false;
   });
 
   window.addEventListener('message', (e) => {
