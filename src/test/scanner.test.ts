@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { scanManifest, SourceDir, defaultSources, vscodeUserDir } from '../core/scanner';
+import { scanManifest, SourceDir, defaultSources, vscodeUserDir, CATEGORY_INFO } from '../core/scanner';
 import { packCategory, unpackCategory, chunkPayload, mergeChunks } from '../core/bundle';
 import { sha256 } from '../core/hash';
 import { Manifest } from '../core/types';
@@ -63,6 +63,21 @@ test('defaultSources include verified paths', () => {
   assert.ok(dirs.includes(path.join(home, '.copilot', 'instructions')));
   assert.ok(dirs.includes(path.join(user, 'mcp.json')));
   assert.ok(dirs.includes(path.join(user, 'chatLanguageModels.json')));
+});
+
+test('CATEGORY_INFO covers every source category with a label and description', () => {
+  const categories = new Set(defaultSources().map((s) => s.category));
+  for (const cat of categories) {
+    const info = CATEGORY_INFO[cat];
+    assert.ok(info, `missing CATEGORY_INFO for ${cat}`);
+    assert.ok(info.label.length > 0, `empty label for ${cat}`);
+    assert.ok(info.description.length > 0, `empty description for ${cat}`);
+  }
+  assert.deepStrictEqual(
+    Object.keys(CATEGORY_INFO).sort(),
+    [...categories].sort(),
+    'CATEGORY_INFO keys must match defaultSources categories'
+  );
 });
 
 test('pack/unpack round trip preserves content and exec bit', () => {

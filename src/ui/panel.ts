@@ -9,6 +9,8 @@ export interface PanelState {
   hasPassphrase?: boolean;
   counts: Record<string, number>;
   enabled: Record<string, boolean>;
+  /** Per-category display metadata (label + what it syncs). */
+  categoryInfo?: Record<string, { label: string; description: string }>;
   history: Array<{ category: string; files: number; direction: 'up' | 'down'; at: string; detail?: Record<string, number> }>;
   version?: string;
   update?: { latest: string; command: string };
@@ -262,6 +264,22 @@ export class SyncPanel {
     width: 14px; height: 14px; cursor: pointer; pointer-events: none;
   }
   .cat .name { flex: 1; font-size: 12.5px; }
+  .cat .help {
+    flex: none;
+    width: 15px; height: 15px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600; line-height: 1;
+    color: var(--vscode-descriptionForeground, #9d9d9d);
+    border: 1px solid var(--vscode-descriptionForeground, #9d9d9d);
+    border-radius: 50%;
+    opacity: 0.6;
+    transition: opacity 0.1s, color 0.1s, border-color 0.1s;
+  }
+  .cat:hover .help {
+    opacity: 1;
+    color: var(--vscode-foreground, #cccccc);
+    border-color: var(--vscode-foreground, #cccccc);
+  }
   .cat .count {
     font-size: 11px; font-variant-numeric: tabular-nums;
     background: var(--vscode-badge-background);
@@ -557,8 +575,17 @@ export class SyncPanel {
   let mode = 'create';
 
   function label(c) {
+    const info = current.categoryInfo && current.categoryInfo[c];
+    if (info) return info.label;
     const names = { skills: 'Skills', instructions: 'Instructions', agents: 'Agents', hooks: 'Hooks', prompts: 'Prompts', mcp: 'MCP Servers', lmProviders: 'LM Providers', sync: '同步' };
     return names[c] || c;
+  }
+  function desc(c) {
+    const info = current.categoryInfo && current.categoryInfo[c];
+    return (info && info.description) || '';
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
   function relTime(iso) {
     const diff = Date.now() - new Date(iso).getTime();
@@ -576,9 +603,13 @@ export class SyncPanel {
     listEl.innerHTML = cats.map((c) => {
       const on = managing ? (draftEnabled[c] !== false) : (current.enabled[c] !== false);
       const cb = managing ? '<input type="checkbox" ' + (on ? 'checked' : '') + ' tabindex="-1">' : '';
-      return '<div class="cat' + (on ? '' : ' off') + '" data-cat="' + c + '">' +
+      const d = desc(c);
+      const help = d ? '<span class="help" aria-hidden="true">?</span>' : '';
+      return '<div class="cat' + (on ? '' : ' off') + '" data-cat="' + c + '"' +
+        (d ? ' title="' + esc(d) + '"' : '') + '>' +
         cb +
         '<span class="name">' + label(c) + '</span>' +
+        help +
         '<span class="count">' + (current.counts[c] || 0) + '</span>' +
         '</div>';
     }).join('');

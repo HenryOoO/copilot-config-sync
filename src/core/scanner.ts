@@ -58,6 +58,44 @@ export function defaultSources(): SourceDir[] {
   ];
 }
 
+export interface CategoryInfo {
+  label: string;
+  /** What this category syncs, shown in the panel help tooltip. */
+  description: string;
+}
+
+/** Display metadata for every category; keys must match `defaultSources()`. */
+export const CATEGORY_INFO: Record<CategoryId, CategoryInfo> = {
+  skills: {
+    label: 'Skills',
+    description: '技能包：每个技能的 SKILL.md 及其附带的脚本、资源文件。',
+  },
+  instructions: {
+    label: 'Instructions',
+    description: '自定义指令文件（.md / .mdc），作为全局规则注入对话。',
+  },
+  agents: {
+    label: 'Agents',
+    description: '自定义 agent 定义（.md），用于自定义子代理。',
+  },
+  hooks: {
+    label: 'Hooks',
+    description: '钩子配置（.json），在会话生命周期事件上执行命令。',
+  },
+  prompts: {
+    label: 'Prompts',
+    description: '可复用的提示词模板（.md），在聊天中以 / 调用。',
+  },
+  mcp: {
+    label: 'MCP Servers',
+    description: 'MCP 服务器配置，包含服务器地址与启动参数。',
+  },
+  lmProviders: {
+    label: 'LM Providers',
+    description: '语言模型提供方配置，包含自定义模型列表与 API Key（上传前加密）。',
+  },
+};
+
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.DS_Store']);
 
 function hasAnySuffix(name: string, suffixes: string[]): boolean {

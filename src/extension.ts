@@ -4,7 +4,7 @@ import { SyncEngine } from './core/engine';
 import { GistBackend } from './storage/gist';
 import { CategoryId } from './core/types';
 import { SyncPanel, PanelState } from './ui/panel';
-import { scanManifest, defaultSources } from './core/scanner';
+import { scanManifest, defaultSources, CATEGORY_INFO } from './core/scanner';
 
 const CONFIG_SECTION = 'copilotConfigSync';
 
@@ -314,6 +314,7 @@ async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistB
   const state: Partial<PanelState> = {
     counts,
     enabled: engine['opts'].enabledCategories as Record<string, boolean>,
+    categoryInfo: CATEGORY_INFO,
     gistId,
     gistName: config.get<string>('gistDescription', 'copilot-config-sync'),
     deviceName: engine['opts'].deviceName,
