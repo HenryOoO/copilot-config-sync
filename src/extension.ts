@@ -1,10 +1,15 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as path from 'path';
 import { SyncEngine } from './core/engine';
 import { GistBackend } from './storage/gist';
 import { CategoryId } from './core/types';
-import { SyncPanel, PanelState } from './ui/panel';
-import { scanManifest, defaultSources, CATEGORY_INFO } from './core/scanner';
+import { SyncPanel, PanelState, DiscoveredModelView } from './ui/panel';
+import { scanManifest, defaultSources, CATEGORY_INFO, lmProvidersPath } from './core/scanner';
+import { discoverModels, discoverFromPricing, enrichModels, ApiType } from './core/discovery';
+import { loadCatalog } from './core/modelCatalog';
+import { resolveAll } from './core/knownModels';
+import { applyDiscoveredModels, readProviderGroups, toModelEntry, CUSTOM_ENDPOINT_VENDOR } from './core/lmProviders';
 
 const CONFIG_SECTION = 'copilotConfigSync';
 
@@ -173,6 +178,21 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     () => {
       void vscode.commands.executeCommand('workbench.action.reloadWindow');
+    },
+    async (opts) => {
+      await runDiscovery(panel, context, opts);
+    },
+    async (models) => {
+      await applyDiscovery(panel, models);
+    },
+    async () => {
+      const groups = existingGroups();
+      return Promise.all(
+        groups.map(async (g) => ({
+          ...g,
+          hasSavedKey: Boolean(await context.secrets.get(savedKeyId(g.name))),
+        }))
+      );
     }
   );
 
@@ -327,6 +347,210 @@ async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistB
 }
 
 export function deactivate(): void {}
+
+/** Where the models.dev catalog is cached between sessions. */
+function catalogCacheFile(context: vscode.ExtensionContext): string {
+  return path.join(context.globalStorageUri.fsPath, 'model-catalog.json');
+}
+
+/**
+ * API key for the in-flight discovery flow. Held in extension memory only —
+ * never round-tripped through the webview state.
+ */
+let pendingDiscoveryKey = '';
+
+/** Secret-storage key under which we cache a group's API key for reuse. */
+function savedKeyId(groupName: string): string {
+  return `discovery.key.${groupName}`;
+}
+
+/**
+ * Existing custom-endpoint groups, so the form can prefill instead of asking
+ * the user to retype a URL they already configured.
+ */
+function existingGroups(): Array<{ name: string; url: string; apiType?: string; hasSavedKey: boolean }> {
+  return readProviderGroups(lmProvidersPath())
+    .filter((g) => g.vendor === CUSTOM_ENDPOINT_VENDOR)
+    .map((g) => ({
+      name: g.name,
+      url: g.models?.[0]?.url ?? '',
+      apiType: g.apiType,
+      hasSavedKey: false,
+    }));
+}
+
+/** Ids already configured for a group, so the UI can mark them as existing. */
+function existingModelIds(groupName: string): Set<string> {
+  const groups = readProviderGroups(lmProvidersPath());
+  const group = groups.find((g) => g.vendor === CUSTOM_ENDPOINT_VENDOR && g.name === groupName);
+  return new Set((group?.models ?? []).map((m) => m.id));
+}
+
+/**
+ * Fetch the endpoint's model list, enrich it from the online catalog, and hand
+ * the result to the panel for review.
+ */
+async function runDiscovery(
+  panel: SyncPanel,
+  context: vscode.ExtensionContext,
+  opts: { baseUrl: string; apiKey: string; apiType: string; groupName: string; useSavedKey?: boolean }
+): Promise<void> {
+  panel.setState({
+    discovery: {
+      phase: 'loading',
+      baseUrl: opts.baseUrl,
+      apiType: opts.apiType,
+      groupName: opts.groupName,
+    },
+  });
+  // fall back to the key cached from a previous run for this group
+  let apiKey = opts.apiKey;
+  if (!apiKey && opts.useSavedKey) {
+    apiKey = (await context.secrets.get(savedKeyId(opts.groupName))) ?? '';
+  }
+  pendingDiscoveryKey = apiKey;
+  try {
+    const apiType = opts.apiType as ApiType;
+    const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+    const catalogPromise = loadCatalog({
+      cacheFile: catalogCacheFile(context),
+      catalogUrl: config.get<string>('discovery.catalogUrl'),
+      maxAgeMs: config.get<number>('discovery.catalogMaxAgeDays', 7) * 24 * 60 * 60 * 1000,
+    });
+    let result;
+    try {
+      result = await discoverModels({ baseUrl: opts.baseUrl, apiKey, apiType });
+      // New API's public pricing list carries capability tags that /v1/models
+      // lacks, so merge them in when available.
+      try {
+        const pricing = await discoverFromPricing({ baseUrl: opts.baseUrl, apiKey: '', apiType });
+        if (enrichModels(result.models, pricing.models) > 0) {
+          result.warnings.push('已用公开模型列表补充能力标签');
+        }
+      } catch {
+        // pricing is optional; ignore failures
+      }
+    } catch (err) {
+      // New API rejects anonymous /v1/models but serves a public pricing list
+      // that also carries capability tags. Only fall back when we have no key.
+      if (apiKey) {
+        throw err;
+      }
+      result = await discoverFromPricing({ baseUrl: opts.baseUrl, apiKey: '', apiType });
+      result.warnings.push('已改用公开模型列表（无需密钥）');
+    }
+    const catalog = await catalogPromise;
+    // remember the key so the next discovery run does not ask for it again
+    if (apiKey) {
+      await context.secrets.store(savedKeyId(opts.groupName), apiKey);
+    }
+    const resolved = resolveAll(result.models, catalog, {
+      contextWindow: config.get<number>('discovery.defaultContextWindow'),
+      maxOutputTokens: config.get<number>('discovery.defaultMaxOutputTokens'),
+    });
+    const existing = existingModelIds(opts.groupName);
+    const models: DiscoveredModelView[] = result.models.map((model, i) => {
+      const caps = resolved[i];
+      return {
+        id: model.id,
+        name: caps.name || model.id,
+        toolCalling: caps.toolCalling ?? true,
+        vision: caps.vision ?? false,
+        contextWindow: caps.contextWindow ?? 128_000,
+        maxOutputTokens: caps.maxOutputTokens ?? 16_000,
+        supportsReasoningEffort: caps.supportsReasoningEffort,
+        sources: caps.sources as Record<string, string>,
+        // pre-select only what is not configured yet
+        selected: !existing.has(model.id),
+        existing: existing.has(model.id),
+      };
+    });
+    const warnings = [...result.warnings];
+    if (Object.keys(catalog).length === 0) {
+      warnings.push('在线模型表不可用（离线且无缓存），能力值来自端点或推测');
+    }
+    panel.setState({
+      discovery: {
+        phase: 'list',
+        baseUrl: opts.baseUrl,
+        apiType: opts.apiType,
+        groupName: opts.groupName,
+        models,
+        warnings,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // a cached key that no longer works must not be reused silently
+    const usedSavedKey = !opts.apiKey && Boolean(apiKey);
+    if (usedSavedKey) {
+      await context.secrets.delete(savedKeyId(opts.groupName));
+    }
+    panel.setState({
+      discovery: {
+        phase: 'form',
+        baseUrl: opts.baseUrl,
+        apiType: opts.apiType,
+        groupName: opts.groupName,
+        error: usedSavedKey ? `${message}（已保存的密钥可能已失效，请重新填写）` : message,
+      },
+    });
+  }
+}
+
+/** Write the selected models into chatLanguageModels.json. */
+async function applyDiscovery(panel: SyncPanel, models: DiscoveredModelView[]): Promise<void> {
+  const state = panel['state'].discovery;
+  if (!state?.baseUrl || !state.groupName) {
+    return;
+  }
+  panel.setState({ discovery: { ...state, phase: 'applying' } });
+  const apiType = state.apiType as ApiType;
+  const entries = models.map((m) =>
+    toModelEntry(
+      m.id,
+      {
+        name: m.name,
+        toolCalling: m.toolCalling,
+        vision: m.vision,
+        contextWindow: m.contextWindow,
+        maxOutputTokens: m.maxOutputTokens,
+        supportsReasoningEffort: m.supportsReasoningEffort,
+      },
+      state.baseUrl!,
+      apiType
+    )
+  );
+  try {
+    const result = await applyDiscoveredModels({
+      file: lmProvidersPath(),
+      groupName: state.groupName,
+      url: state.baseUrl,
+      apiKey: pendingDiscoveryKey,
+      apiType,
+      entries,
+      executeCommand: (command, ...args) => vscode.commands.executeCommand(command, ...args),
+    });
+    pendingDiscoveryKey = '';
+    panel.setState({
+      discovery: {
+        ...state,
+        phase: 'done',
+        result: { added: result.added.length, kept: result.kept.length },
+        keyStoredSecurely: result.keyStoredSecurely,
+        keyOmitted: result.keyOmitted,
+      },
+    });
+    pendingDiscoveryKey = '';
+    panel.toast(
+      `已写入 ${result.added.length} 个模型` +
+        (result.kept.length ? `，跳过 ${result.kept.length} 个已存在的` : '')
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    panel.setState({ discovery: { ...state, phase: 'list', error: message } });
+  }
+}
 
 /** Fetch the newest VSIX asset from the "latest" release via the GitHub API. */
 async function fetchLatestVersion(): Promise<{ version: string; url: string } | undefined> {

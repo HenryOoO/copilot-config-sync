@@ -29,6 +29,11 @@ export function vscodeUserDir(): string {
   }
 }
 
+/** Absolute path of the BYOK language-model provider config file. */
+export function lmProvidersPath(): string {
+  return path.join(vscodeUserDir(), 'chatLanguageModels.json');
+}
+
 /**
  * User-level Copilot config sources, mirroring VS Code 1.139 built-in discovery
  * (verified against the workbench source and official docs).
@@ -54,7 +59,7 @@ export function defaultSources(): SourceDir[] {
     { category: 'hooks', dir: path.join(home, '.copilot', 'hooks'), suffixes: ['.json'], recursive: false },
     { category: 'prompts', dir: path.join(user, 'prompts'), suffixes: ['.md'], recursive: false },
     { category: 'mcp', dir: path.join(user, 'mcp.json'), suffixes: [], recursive: false },
-    { category: 'lmProviders', dir: path.join(user, 'chatLanguageModels.json'), suffixes: [], recursive: false },
+    { category: 'lmProviders', dir: lmProvidersPath(), suffixes: [], recursive: false },
   ];
 }
 

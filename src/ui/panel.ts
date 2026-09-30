@@ -1,5 +1,41 @@
 import * as vscode from 'vscode';
 
+/** One discovered model as shown in the discovery modal. */
+export interface DiscoveredModelView {
+  id: string;
+  name: string;
+  toolCalling: boolean;
+  vision: boolean;
+  contextWindow: number;
+  maxOutputTokens: number;
+  supportsReasoningEffort?: string[];
+  /** Per-field provenance: 'catalog' | 'endpoint' | 'guess'. */
+  sources: Record<string, string>;
+  selected: boolean;
+  /** true when the model is already configured in chatLanguageModels.json. */
+  existing: boolean;
+}
+
+/** State of the model-discovery flow. */
+export interface DiscoveryState {
+  phase: 'form' | 'loading' | 'list' | 'applying' | 'done';
+  baseUrl?: string;
+  apiType?: string;
+  groupName?: string;
+  models?: DiscoveredModelView[];
+  warnings?: string[];
+  error?: string;
+  /** true when the API key went to secret storage instead of the file. */
+  keyStoredSecurely?: boolean;
+  /** true when no key could be stored; the user must paste it in VS Code. */
+  keyOmitted?: boolean;
+  result?: { added: number; kept: number };
+  /** Existing custom-endpoint groups, offered as quick-fill presets. */
+  groups?: Array<{ name: string; url: string; apiType?: string; hasSavedKey: boolean }>;
+  /** true when a key for the selected group is already cached locally. */
+  hasSavedKey?: boolean;
+}
+
 export interface PanelState {
   status: 'idle' | 'syncing' | 'ok' | 'error' | 'not-setup';
   lastSyncAt?: string;
@@ -25,6 +61,8 @@ export interface PanelState {
   reloadPrompt?: boolean;
   /** Transient in-panel toast; replaces native bottom-right messages. */
   toast?: { text: string; kind: 'info' | 'error'; seq: number };
+  /** Model auto-discovery flow state; undefined when the modal is closed. */
+  discovery?: DiscoveryState;
 }
 
 export class SyncPanel {
@@ -39,7 +77,16 @@ export class SyncPanel {
     private readonly onSaveSettings: (settings: { gistName: string; gistId: string; deviceName: string; passphrase?: string }) => Promise<void>,
     private readonly onCheckUpdate: () => Promise<void>,
     private readonly onInstallUpdate: () => Promise<void>,
-    private readonly onReloadWindow: () => void
+    private readonly onReloadWindow: () => void,
+    private readonly onDiscoverModels: (opts: {
+      baseUrl: string;
+      apiKey: string;
+      apiType: string;
+      groupName: string;
+      useSavedKey?: boolean;
+    }) => Promise<void>,
+    private readonly onApplyDiscovered: (models: DiscoveredModelView[]) => Promise<void>,
+    private readonly onListGroups: () => Promise<Array<{ name: string; url: string; apiType?: string; hasSavedKey: boolean }>>
   ) {
     this.state = {
       status: 'idle',
@@ -76,6 +123,29 @@ export class SyncPanel {
           break;
         case 'reloadWindow':
           this.onReloadWindow();
+          break;
+        case 'discoverOpen':
+          this.setState({
+            discovery: {
+              phase: 'form',
+              groups: await this.onListGroups(),
+            },
+          });
+          break;
+        case 'discoverClose':
+          this.setState({ discovery: undefined });
+          break;
+        case 'discoverRun':
+          await this.onDiscoverModels({
+            baseUrl: msg.baseUrl,
+            apiKey: msg.apiKey,
+            apiType: msg.apiType,
+            groupName: msg.groupName,
+            useSavedKey: msg.useSavedKey === true,
+          });
+          break;
+        case 'discoverApply':
+          await this.onApplyDiscovered(msg.models);
           break;
         case 'ready':
           this.postState();
@@ -264,22 +334,6 @@ export class SyncPanel {
     width: 14px; height: 14px; cursor: pointer; pointer-events: none;
   }
   .cat .name { flex: 1; font-size: 12.5px; }
-  .cat .help {
-    flex: none;
-    width: 15px; height: 15px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 10px; font-weight: 600; line-height: 1;
-    color: var(--vscode-descriptionForeground, #9d9d9d);
-    border: 1px solid var(--vscode-descriptionForeground, #9d9d9d);
-    border-radius: 50%;
-    opacity: 0.6;
-    transition: opacity 0.1s, color 0.1s, border-color 0.1s;
-  }
-  .cat:hover .help {
-    opacity: 1;
-    color: var(--vscode-foreground, #cccccc);
-    border-color: var(--vscode-foreground, #cccccc);
-  }
   .cat .count {
     font-size: 11px; font-variant-numeric: tabular-nums;
     background: var(--vscode-badge-background);
@@ -436,6 +490,55 @@ export class SyncPanel {
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
   }
+
+  /* ── model discovery ── */
+  .modal.wide { width: min(560px, 94vw); max-height: 86vh; }
+  .disc-field { margin-bottom: 9px; }
+  .disc-field label { display: block; font-size: 11px; margin-bottom: 3px; color: var(--vscode-descriptionForeground); }
+  .disc-field input, .disc-field select {
+    width: 100%; padding: 5px 7px; font-size: 12px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 3px;
+    font-family: var(--vscode-font-family);
+  }
+  .disc-field input:focus, .disc-field select:focus { outline: 1px solid var(--vscode-focusBorder); }
+  .disc-note { font-size: 10.5px; color: var(--vscode-descriptionForeground); margin-top: 3px; line-height: 1.45; }
+  .disc-warn {
+    font-size: 10.5px; line-height: 1.45; margin-bottom: 8px; padding: 6px 8px;
+    border-left: 2px solid var(--vscode-charts-orange);
+    background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.04));
+    color: var(--vscode-descriptionForeground);
+  }
+  .disc-toolbar { display: flex; align-items: center; gap: 6px; margin: 8px 0 6px; }
+  .disc-toolbar .spacer { flex: 1; }
+  .disc-toolbar button {
+    font-size: 10.5px; padding: 3px 8px; border-radius: 3px; cursor: pointer;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: none;
+  }
+  .disc-toolbar button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  .disc-count { font-size: 10.5px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+  .disc-list { overflow-y: auto; flex: 1; min-height: 120px; max-height: 46vh; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); }
+  .disc-row { display: flex; align-items: center; gap: 7px; padding: 5px 2px; font-size: 11.5px; }
+  .disc-row:hover { background: var(--vscode-list-hoverBackground); }
+  .disc-row input[type=checkbox] { flex: none; margin: 0; }
+  .disc-row .mid { flex: 1; min-width: 0; }
+  .disc-row .mid .id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .disc-row .mid .meta { font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 1px; }
+  .disc-row .tag {
+    flex: none; font-size: 9.5px; padding: 1px 5px; border-radius: 8px;
+    background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
+  }
+  .disc-row .tag.existing { background: var(--vscode-charts-green); color: #fff; }
+  .disc-row .tag.guess { background: var(--vscode-charts-orange); color: #fff; }
+  .disc-row .tag.catalog { background: var(--vscode-charts-blue, #3794ff); color: #fff; }
+  .disc-row .tag.endpoint { background: var(--vscode-charts-purple, #b180d7); color: #fff; }
+  .disc-empty { padding: 18px 4px; text-align: center; font-size: 11.5px; color: var(--vscode-descriptionForeground); }
+  .disc-spinner { padding: 22px 4px; text-align: center; font-size: 11.5px; color: var(--vscode-descriptionForeground); }
+  .disc-error { font-size: 11px; color: var(--vscode-errorForeground); margin-top: 6px; line-height: 1.45; }
 </style>
 </head>
 <body>
@@ -495,6 +598,10 @@ export class SyncPanel {
     </div>
     <div class="cat-list" id="cats"></div>
 
+    <div class="actions" style="margin-top:10px">
+      <button class="secondary" id="discoverBtn" style="width:100%">发现模型…</button>
+    </div>
+
     <div class="section-title"><span>最近同步</span></div>
     <div class="history" id="history"><div class="empty">还没有同步记录</div></div>
 
@@ -526,6 +633,64 @@ export class SyncPanel {
         <div class="btn-row">
           <button class="secondary" id="reloadLater">稍后</button>
           <button class="primary" id="reloadNow">立即重载</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-mask hidden" id="discMask">
+      <div class="modal wide" role="dialog" aria-modal="true">
+        <button class="modal-x" id="discX" aria-label="关闭">×</button>
+        <h2 id="discTitle">发现模型</h2>
+        <div class="sub" id="discSub"></div>
+
+        <div id="discForm">
+          <div class="disc-field hidden" id="discPresetField">
+            <label>已有分组</label>
+            <select id="discPreset"></select>
+            <div class="disc-note">选择后自动填入该分组的地址与类型。</div>
+          </div>
+          <div class="disc-field">
+            <label>Base URL</label>
+            <input type="text" id="discUrl" placeholder="https://api.example.com/v1" spellcheck="false">
+          </div>
+          <div class="disc-field">
+            <label>API Key <span style="font-weight:400">（可选）</span></label>
+            <input type="password" id="discKey" placeholder="留空则尝试不带密钥拉取" spellcheck="false">
+            <div class="disc-note" id="discKeyNote">
+              仅用于拉取模型列表，与 Copilot 已保存的密钥相互独立。留空则尝试匿名拉取；若端点要求鉴权再填。
+            </div>
+          </div>
+          <div class="disc-field">
+            <label>API 类型</label>
+            <select id="discApiType">
+              <option value="chat-completions">Chat Completions</option>
+              <option value="responses">Responses</option>
+              <option value="messages">Messages (Anthropic)</option>
+            </select>
+          </div>
+          <div class="disc-field">
+            <label>分组名称</label>
+            <input type="text" id="discGroup" placeholder="NewApi" spellcheck="false">
+            <div class="disc-note">同名分组会被合并，已有模型不会被覆盖。</div>
+          </div>
+          <div class="disc-error" id="discError"></div>
+        </div>
+
+        <div id="discBody" class="hidden">
+          <div class="disc-warn hidden" id="discWarn"></div>
+          <div class="disc-toolbar">
+            <button id="discAll">全选</button>
+            <button id="discNone">全不选</button>
+            <button id="discTools">仅工具调用</button>
+            <span class="spacer"></span>
+            <span class="disc-count" id="discCount"></span>
+          </div>
+          <div class="disc-list" id="discList"></div>
+        </div>
+
+        <div class="btn-row">
+          <button class="secondary" id="discCancel">取消</button>
+          <button class="primary" id="discGo">开始发现</button>
         </div>
       </div>
     </div>
@@ -604,12 +769,10 @@ export class SyncPanel {
       const on = managing ? (draftEnabled[c] !== false) : (current.enabled[c] !== false);
       const cb = managing ? '<input type="checkbox" ' + (on ? 'checked' : '') + ' tabindex="-1">' : '';
       const d = desc(c);
-      const help = d ? '<span class="help" aria-hidden="true">?</span>' : '';
       return '<div class="cat' + (on ? '' : ' off') + '" data-cat="' + c + '"' +
         (d ? ' title="' + esc(d) + '"' : '') + '>' +
         cb +
         '<span class="name">' + label(c) + '</span>' +
-        help +
         '<span class="count">' + (current.counts[c] || 0) + '</span>' +
         '</div>';
     }).join('');
@@ -710,6 +873,8 @@ export class SyncPanel {
     if (!editingSettings) {
       fillSettings();
     }
+
+    renderDiscovery(state.discovery);
 
     // history: lazy render in batches, load more on scroll
     const hist = $('history');
@@ -858,7 +1023,12 @@ export class SyncPanel {
     if (e.target === $('modalMask')) $('modalMask').classList.add('hidden');
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') $('modalMask').classList.add('hidden');
+    if (e.key === 'Escape') {
+      $('modalMask').classList.add('hidden');
+      if (!$('discMask').classList.contains('hidden')) {
+        vscode.postMessage({ type: 'discoverClose' });
+      }
+    }
   });
 
   // lazy load on scroll
@@ -942,6 +1112,217 @@ export class SyncPanel {
   $('reloadLater').addEventListener('click', () => {
     $('reloadMask').classList.add('hidden');
     if (current) current.reloadPrompt = false;
+  });
+
+  // ── model discovery ──
+  let discModels = [];
+  let discPhase = 'form';
+  let discGroups = [];
+
+  /** Offer existing custom-endpoint groups as one-click presets. */
+  function renderPresets(groups) {
+    discGroups = groups;
+    const field = $('discPresetField');
+    if (!groups.length) {
+      field.classList.add('hidden');
+      return;
+    }
+    field.classList.remove('hidden');
+    $('discPreset').innerHTML =
+      '<option value="">— 手动填写 —</option>' +
+      groups.map((g, i) => '<option value="' + i + '">' + esc(g.name) + (g.hasSavedKey ? '（已存密钥）' : '') + '</option>').join('');
+  }
+
+  function applyPreset(idx) {
+    const g = discGroups[idx];
+    if (!g) return;
+    $('discGroup').value = g.name;
+    if (g.url) $('discUrl').value = g.url;
+    if (g.apiType) $('discApiType').value = g.apiType;
+    // a cached key means the user does not have to paste it again
+    $('discKey').value = '';
+    $('discKey').placeholder = g.hasSavedKey ? '留空则使用已保存的密钥' : '留空则尝试不带密钥拉取';
+    $('discKeyNote').textContent = g.hasSavedKey
+      ? '本机已保存该分组的密钥，留空即可直接拉取。'
+      : '仅用于拉取模型列表，与 Copilot 已保存的密钥相互独立。留空则尝试匿名拉取；若端点要求鉴权再填。';
+  }
+
+  function fmtTokens(n) {
+    if (!n) return '?';
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0) + 'M';
+    if (n >= 1000) return Math.round(n / 1000) + 'k';
+    return String(n);
+  }
+
+  function sourceTag(m) {
+    // the weakest source across the capability fields decides the badge
+    const vals = Object.values(m.sources || {});
+    if (vals.includes('guess')) return '<span class="tag guess">推测</span>';
+    if (vals.includes('endpoint')) return '<span class="tag endpoint">端点</span>';
+    if (vals.includes('catalog')) return '<span class="tag catalog">在线表</span>';
+    return '';
+  }
+
+  function renderDiscList() {
+    const list = $('discList');
+    if (!discModels.length) {
+      list.innerHTML = '<div class="disc-empty">端点没有返回任何模型</div>';
+      updateDiscCount();
+      return;
+    }
+    list.innerHTML = discModels.map((m, i) => {
+      const caps = [];
+      if (m.toolCalling) caps.push('工具');
+      if (m.vision) caps.push('视觉');
+      caps.push(fmtTokens(m.contextWindow) + ' 上下文');
+      if (m.supportsReasoningEffort && m.supportsReasoningEffort.length) caps.push('推理');
+      return '<div class="disc-row">' +
+        '<input type="checkbox" data-i="' + i + '"' + (m.selected ? ' checked' : '') + '>' +
+        '<span class="mid">' +
+          '<div class="id">' + esc(m.id) + '</div>' +
+          '<div class="meta">' + esc(caps.join(' · ')) + '</div>' +
+        '</span>' +
+        (m.existing ? '<span class="tag existing">已配置</span>' : '') +
+        sourceTag(m) +
+        '</div>';
+    }).join('');
+    list.querySelectorAll('input[type=checkbox]').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        discModels[Number(cb.dataset.i)].selected = cb.checked;
+        updateDiscCount();
+      });
+    });
+    updateDiscCount();
+  }
+
+  function updateDiscCount() {
+    const n = discModels.filter((m) => m.selected).length;
+    const fresh = discModels.filter((m) => m.selected && !m.existing).length;
+    $('discCount').textContent = '已选 ' + n + ' 个（新增 ' + fresh + '）';
+  }
+
+  function setDiscPhase(phase) {
+    discPhase = phase;
+    const form = phase === 'form';
+    const done = phase === 'done';
+    $('discForm').classList.toggle('hidden', !form);
+    $('discBody').classList.toggle('hidden', form);
+    $('discGo').textContent = form ? '开始发现' : done ? '完成' : '写入配置';
+    $('discGo').disabled = phase === 'loading' || phase === 'applying';
+    $('discCancel').textContent = form ? '取消' : done ? '关闭' : '返回';
+    $('discTitle').textContent = form ? '发现模型' : done ? '已写入配置' : '选择要添加的模型';
+    if (form) {
+      $('discSub').textContent = '填写端点信息，自动拉取模型列表并补齐能力元数据。';
+    }
+  }
+
+  function renderDiscovery(d) {
+    const mask = $('discMask');
+    if (!d) {
+      mask.classList.add('hidden');
+      return;
+    }
+    mask.classList.remove('hidden');
+    $('discError').textContent = d.error || '';
+
+    if (d.phase === 'loading') {
+      setDiscPhase('form');
+      $('discGo').disabled = true;
+      $('discGo').textContent = '拉取中…';
+      return;
+    }
+    if (d.phase === 'applying') {
+      setDiscPhase('list');
+      $('discGo').disabled = true;
+      $('discGo').textContent = '写入中…';
+      return;
+    }
+    if (d.phase === 'form') {
+      setDiscPhase('form');
+      if (d.baseUrl !== undefined) $('discUrl').value = d.baseUrl;
+      if (d.groupName !== undefined) $('discGroup').value = d.groupName;
+      if (d.apiType !== undefined) $('discApiType').value = d.apiType;
+      renderPresets(d.groups || []);
+      return;
+    }
+    // list / done
+    if (d.models) {
+      discModels = d.models;
+      renderDiscList();
+    }
+    setDiscPhase(d.phase === 'done' ? 'done' : 'list');
+    if (d.phase === 'done' && d.result) {
+      $('discSub').textContent =
+        '新增 ' + d.result.added + ' 个，跳过 ' + d.result.kept + ' 个已存在的。' +
+        (d.keyOmitted
+          ? '模型已写入，但密钥未能自动保存 —— 请在 VS Code 的「管理模型」里为该分组粘贴一次 API Key。'
+          : d.keyStoredSecurely
+            ? 'API Key 保存在密钥库中，配置文件里只保留引用。'
+            : '');
+    } else if (d.groupName) {
+      $('discSub').textContent = '分组：' + d.groupName;
+    }
+    const warn = $('discWarn');
+    if (d.warnings && d.warnings.length) {
+      warn.textContent = d.warnings.join('；');
+      warn.classList.remove('hidden');
+    } else {
+      warn.classList.add('hidden');
+    }
+  }
+
+  $('discoverBtn').addEventListener('click', () => vscode.postMessage({ type: 'discoverOpen' }));
+  $('discX').addEventListener('click', () => vscode.postMessage({ type: 'discoverClose' }));
+  $('discCancel').addEventListener('click', () => {
+    if (discPhase === 'form' || discPhase === 'done') {
+      vscode.postMessage({ type: 'discoverClose' });
+    } else {
+      setDiscPhase('form');
+    }
+  });
+  $('discMask').addEventListener('click', (e) => {
+    if (e.target === $('discMask')) vscode.postMessage({ type: 'discoverClose' });
+  });
+  $('discGo').addEventListener('click', () => {
+    if (discPhase === 'done') {
+      vscode.postMessage({ type: 'discoverClose' });
+      return;
+    }
+    if (discPhase === 'form') {
+      const baseUrl = $('discUrl').value.trim();
+      const groupName = $('discGroup').value.trim() || 'Custom Endpoint';
+      if (!baseUrl) { $('discError').textContent = '请填写 Base URL'; return; }
+      const apiKey = $('discKey').value;
+      $('discError').textContent = '';
+      vscode.postMessage({
+        type: 'discoverRun',
+        baseUrl,
+        apiKey,
+        apiType: $('discApiType').value,
+        groupName,
+        useSavedKey: !apiKey,
+      });
+      return;
+    }
+    const picked = discModels.filter((m) => m.selected);
+    if (!picked.length) { $('discError').textContent = '请至少选择一个模型'; return; }
+    $('discError').textContent = '';
+    vscode.postMessage({ type: 'discoverApply', models: picked });
+  });
+  $('discAll').addEventListener('click', () => {    discModels.forEach((m) => { m.selected = true; });
+    renderDiscList();
+  });
+  $('discNone').addEventListener('click', () => {
+    discModels.forEach((m) => { m.selected = false; });
+    renderDiscList();
+  });
+  $('discTools').addEventListener('click', () => {
+    discModels.forEach((m) => { m.selected = !!m.toolCalling; });
+    renderDiscList();
+  });
+  $('discPreset').addEventListener('change', (e) => {
+    const v = e.target.value;
+    if (v !== '') applyPreset(Number(v));
   });
 
   window.addEventListener('message', (e) => {

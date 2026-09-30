@@ -63,6 +63,26 @@
           "type": "string",
           "default": "",
           "description": "Device name recorded in the manifest. Defaults to os.hostname()."
+        },
+        "copilotConfigSync.discovery.catalogUrl": {
+          "type": "string",
+          "default": "https://models.dev/api.json",
+          "description": "Online model catalog used to fill in tool calling, vision and context window for discovered models."
+        },
+        "copilotConfigSync.discovery.catalogMaxAgeDays": {
+          "type": "number",
+          "default": 7,
+          "description": "Refresh the cached model catalog after this many days."
+        },
+        "copilotConfigSync.discovery.defaultContextWindow": {
+          "type": "number",
+          "default": 128000,
+          "description": "Context window assumed for a discovered model that neither the endpoint nor the catalog describes."
+        },
+        "copilotConfigSync.discovery.defaultMaxOutputTokens": {
+          "type": "number",
+          "default": 16000,
+          "description": "Max output tokens assumed for a discovered model that neither the endpoint nor the catalog describes."
         }
       }
     }
@@ -70,7 +90,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "NODE_PATH=test-mock node --test out/test/crypto.test.js out/test/scanner.test.js out/test/engine.test.js",
+    "test": "NODE_PATH=test-mock node --test out/test/crypto.test.js out/test/scanner.test.js out/test/engine.test.js out/test/modelCatalog.test.js out/test/discovery.test.js",
     "package": "vsce package"
   },
   "devDependencies": {
