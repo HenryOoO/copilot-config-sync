@@ -64,6 +64,11 @@
           "default": "",
           "description": "Device name recorded in the manifest. Defaults to os.hostname()."
         },
+        "copilotConfigSync.changeCheckIntervalSec": {
+          "type": "number",
+          "default": 60,
+          "description": "How often to check for unsynced changes while the panel is visible, in seconds. Set to 0 to disable background checks."
+        },
         "copilotConfigSync.discovery.catalogUrl": {
           "type": "string",
           "default": "https://models.dev/api.json",

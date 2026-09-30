@@ -93,6 +93,8 @@ export function activate(context: vscode.ExtensionContext): void {
           panel.toast(message, 'error');
         }
       }
+      // refresh the pending-change banner either way
+      void checkForChanges(engine, panel, backend);
     },
     async (category, enabled) => {
       const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
@@ -110,6 +112,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await backend.setPassphrase(passphrase);
         await refreshPanel(engine, panel, backend, context);
         panel.toast('已连接，可以开始同步了');
+        void checkForChanges(engine, panel, backend);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         panel.toast(message, 'error');
@@ -133,6 +136,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await backend.setGistId(settings.gistId || undefined);
         await refreshPanel(engine, panel, backend, context);
         panel.toast('设置已保存');
+        void checkForChanges(engine, panel, backend);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         panel.toast(message, 'error');
@@ -196,10 +200,38 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   );
 
+  // background change detection: poll while the panel is visible, skip when hidden
+  const intervalSec = vscode.workspace
+    .getConfiguration(CONFIG_SECTION)
+    .get<number>('changeCheckIntervalSec', 60);
+  let panelVisible = false;
+  if (intervalSec > 0) {
+    const timer = setInterval(() => {
+      if (panelVisible) {
+        void checkForChanges(engine, panel, backend);
+      }
+    }, intervalSec * 1000);
+    context.subscriptions.push({ dispose: () => clearInterval(timer) });
+  }
+
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       'copilotConfigSync.panel',
-      { resolveWebviewView: (view) => panel.resolveWebviewView(view) },
+      {
+        resolveWebviewView: (view) => {
+          panel.resolveWebviewView(view);
+          panelVisible = view.visible;
+          context.subscriptions.push(
+            view.onDidChangeVisibility(() => {
+              panelVisible = view.visible;
+              if (panelVisible) {
+                void checkForChanges(engine, panel, backend);
+              }
+            })
+          );
+          void checkForChanges(engine, panel, backend);
+        },
+      },
       { webviewOptions: { retainContextWhenHidden: true } }
     )
   );
@@ -321,13 +353,15 @@ function loadHistory(context: vscode.ExtensionContext): PanelState['history'] {
 async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistBackend, context: vscode.ExtensionContext): Promise<void> {
   const manifest = scanManifest(defaultSources(), engine['opts'].deviceName);
   const counts: Record<string, number> = {};
-  for (const [cat, data] of Object.entries(manifest.categories)) {
-    if (cat === 'skills') {
-      // count skills (SKILL.md entries), not files
-      counts[cat] = data.files.filter((f) => f.path.toLowerCase().endsWith('/skill.md') || f.path.toLowerCase() === 'skill.md').length;
-    } else {
-      counts[cat] = data.files.length;
-    }
+  // every category gets an entry so rows (and the LM Providers discovery entry)
+  // keep a stable position even when nothing is configured yet
+  for (const cat of ALL_CATEGORIES) {
+    const files = manifest.categories[cat]?.files ?? [];
+    counts[cat] =
+      cat === 'skills'
+        ? // count skills (SKILL.md entries), not files
+          files.filter((f) => f.path.toLowerCase().endsWith('/skill.md') || f.path.toLowerCase() === 'skill.md').length
+        : files.length;
   }
   const gistId = await backend.getGistId();
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
@@ -347,6 +381,44 @@ async function refreshPanel(engine: SyncEngine, panel: SyncPanel, backend: GistB
 }
 
 export function deactivate(): void {}
+
+/** Guards against overlapping background checks. */
+let changeCheckInFlight = false;
+
+/**
+ * Compare local vs remote in the background and surface the result as a panel
+ * banner plus a sidebar badge. Never prompts and never toasts: a failed check
+ * (offline, no auth) simply leaves the previous state alone.
+ */
+async function checkForChanges(engine: SyncEngine, panel: SyncPanel, backend: GistBackend): Promise<void> {
+  const state = panel['state'];
+  if (!(await backend.getGistId()) || state.status === 'syncing' || changeCheckInFlight) {
+    return;
+  }
+  changeCheckInFlight = true;
+  try {
+    const diff = await engine.diffStatus({ silent: true });
+    if (diff.localOnly === -1) {
+      // remote gist exists but holds no bundle yet: offer the initial push
+      panel.setState({ changes: { count: 1, direction: 'up', initial: true, detail: {} } });
+      panel.setBadge(1);
+      return;
+    }
+    const count = diff.localOnly + diff.remoteOnly + diff.conflicts;
+    if (count === 0) {
+      panel.setState({ changes: undefined });
+      panel.setBadge(undefined);
+      return;
+    }
+    const direction = diff.localOnly > 0 && diff.remoteOnly > 0 ? 'both' : diff.localOnly > 0 ? 'up' : 'down';
+    panel.setState({ changes: { count, direction, detail: diff.detail } });
+    panel.setBadge(count);
+  } catch {
+    // background check is best-effort
+  } finally {
+    changeCheckInFlight = false;
+  }
+}
 
 /** Where the models.dev catalog is cached between sessions. */
 function catalogCacheFile(context: vscode.ExtensionContext): string {

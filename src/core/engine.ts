@@ -94,12 +94,12 @@ export class SyncEngine {
     return scanManifest(this.opts.sources || defaultSources(), this.opts.deviceName);
   }
 
-  private async readRemoteBundle(): Promise<Bundle | undefined> {
+  private async readRemoteBundle(decrypt = true): Promise<Bundle | undefined> {
     const remote = await this.opts.backend.read();
     if (!remote) {
       return undefined;
     }
-    if (remote.kdfSalt) {
+    if (decrypt && remote.kdfSalt) {
       const { key } = await this.getPassphraseKey(remote.kdfSalt);
       for (const payload of Object.values(remote.categories)) {
         if (!payload) {
@@ -271,8 +271,12 @@ export class SyncEngine {
   /**
    * Read-only three-way comparison of local vs remote, without touching disk.
    * Used by "sync now" to decide direction automatically.
+   *
+   * Pass `{ silent: true }` for background checks: sensitive fields are left
+   * encrypted and compared by the hashes already stored in the bundle, so no
+   * passphrase prompt can appear.
    */
-  async diffStatus(): Promise<{
+  async diffStatus(opts: { silent?: boolean } = {}): Promise<{
     localOnly: number;
     remoteOnly: number;
     conflicts: number;
@@ -281,7 +285,7 @@ export class SyncEngine {
     detail: Record<string, number>;
   }> {
     const local = this.scanLocal();
-    const remoteBundle = await this.readRemoteBundle();
+    const remoteBundle = await this.readRemoteBundle(!opts.silent);
     if (!remoteBundle) {
       return { localOnly: -1, remoteOnly: 0, conflicts: 0, localDeleted: 0, remoteDeleted: 0, detail: {} };
     }

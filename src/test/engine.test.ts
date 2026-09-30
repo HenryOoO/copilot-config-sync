@@ -141,6 +141,23 @@ test('diffStatus: no remote bundle means initial push', () => {
   });
 });
 
+test('diffStatus: silent mode skips decryption and still detects changes', () => {
+  const root = tmpDir();
+  fs.writeFileSync(path.join(root, 'a.md'), 'same');
+  const sources: SourceDir[] = [{ category: 'skills', dir: root, suffixes: [], recursive: true }];
+  const base = scanManifest(sources, 'd');
+  fs.writeFileSync(path.join(root, 'a.md'), 'changed locally');
+  const remote = bundleOf(base);
+  // a kdfSalt would normally trigger a passphrase prompt during decryption
+  remote.kdfSalt = 'salt';
+  const engine = makeEngine(remote, base, sources);
+  return engine.diffStatus({ silent: true }).then((diff) => {
+    assert.strictEqual(diff.localOnly, 1);
+    assert.strictEqual(diff.detail.skills, 1);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
 test('push counts only changed files, not whole bundle', async () => {
   const root = tmpDir();
   fs.writeFileSync(path.join(root, 'a.md'), 'same');

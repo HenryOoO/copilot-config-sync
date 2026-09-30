@@ -63,6 +63,14 @@ export interface PanelState {
   toast?: { text: string; kind: 'info' | 'error'; seq: number };
   /** Model auto-discovery flow state; undefined when the modal is closed. */
   discovery?: DiscoveryState;
+  /** Pending local/remote differences, surfaced as a banner and a view badge. */
+  changes?: {
+    count: number;
+    direction: 'up' | 'down' | 'both';
+    /** true when the remote gist has no bundle yet (first sync). */
+    initial?: boolean;
+    detail: Record<string, number>;
+  };
 }
 
 export class SyncPanel {
@@ -162,6 +170,14 @@ export class SyncPanel {
   /** Show a transient toast inside the panel instead of a native message. */
   toast(text: string, kind: 'info' | 'error' = 'info'): void {
     this.setState({ toast: { text, kind, seq: (this.state.toast?.seq || 0) + 1 } });
+  }
+
+  /** Set the sidebar view badge to the pending change count (undefined clears it). */
+  setBadge(count: number | undefined): void {
+    if (!this.view) {
+      return;
+    }
+    this.view.badge = count ? { value: count, tooltip: `${count} 项变更待同步` } : undefined;
   }
 
   /** Ask the user to confirm installing the pending update (in-panel modal). */
@@ -283,6 +299,26 @@ export class SyncPanel {
     .dot.syncing { animation: none; }
   }
 
+  /* ── pending changes banner ── */
+  .changes {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px;
+    margin-bottom: 10px;
+    border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.25));
+    border-left: 2px solid var(--vscode-charts-blue, #3794ff);
+    border-radius: 6px;
+    background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.04));
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+  .changes.hidden { display: none; }
+  .changes .msg { flex: 1; min-width: 0; }
+  .changes .msg b { font-variant-numeric: tabular-nums; }
+  .changes button {
+    flex: none; font-size: 10.5px; padding: 3px 9px; border-radius: 3px;
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+  }
+
   /* ── actions ── */
   .actions { display: flex; gap: 8px; margin-bottom: 16px; }
   button {
@@ -340,6 +376,17 @@ export class SyncPanel {
     color: var(--vscode-badge-foreground);
     border-radius: 9px; padding: 1px 7px;
   }
+  .cat .change-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex: none;
+    background: var(--vscode-charts-blue, #3794ff);
+  }
+  .cat .change-dot.hidden { display: none; }
+  .cat .inline-action {
+    flex: none; font-size: 10.5px; padding: 2px 8px; border-radius: 3px;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+  }
+  .cat .inline-action.hidden { display: none; }
   .cat.off .name { opacity: 0.55; }
   .cat-actions { display: flex; gap: 8px; margin: 8px 2px 16px; }
   .cat-actions.hidden { display: none; }
@@ -578,6 +625,11 @@ export class SyncPanel {
 
   <!-- connected: main UI -->
   <div id="main" class="hidden">
+    <div class="changes hidden" id="changes">
+      <span class="msg" id="changesMsg"></span>
+      <button id="changesSync">立即同步</button>
+    </div>
+
     <div class="pulse" id="pulse">
       <div class="endpoint"><span class="codicon-ish">⌂</span>本机</div>
       <div class="track-wrap"><div class="label-row"><span class="track-label" id="trackLabel"></span></div><div class="track"><div class="flow"></div></div></div>
@@ -597,10 +649,6 @@ export class SyncPanel {
       </span>
     </div>
     <div class="cat-list" id="cats"></div>
-
-    <div class="actions" style="margin-top:10px">
-      <button class="secondary" id="discoverBtn" style="width:100%">发现模型…</button>
-    </div>
 
     <div class="section-title"><span>最近同步</span></div>
     <div class="history" id="history"><div class="empty">还没有同步记录</div></div>
@@ -765,15 +813,22 @@ export class SyncPanel {
   function renderCats() {
     const listEl = $('cats');
     const cats = Object.keys(current.counts);
+    const changed = (current.changes && current.changes.detail) || {};
     listEl.innerHTML = cats.map((c) => {
       const on = managing ? (draftEnabled[c] !== false) : (current.enabled[c] !== false);
       const cb = managing ? '<input type="checkbox" ' + (on ? 'checked' : '') + ' tabindex="-1">' : '';
       const d = desc(c);
+      // model discovery belongs to the LM Providers row, not a full-width button
+      const action = c === 'lmProviders'
+        ? '<button class="inline-action' + (managing ? ' hidden' : '') + '" data-action="discover">发现模型</button>'
+        : '';
       return '<div class="cat' + (on ? '' : ' off') + '" data-cat="' + c + '"' +
         (d ? ' title="' + esc(d) + '"' : '') + '>' +
         cb +
         '<span class="name">' + label(c) + '</span>' +
+        '<span class="change-dot' + (changed[c] ? '' : ' hidden') + '" title="' + (changed[c] || 0) + ' 项变更"></span>' +
         '<span class="count">' + (current.counts[c] || 0) + '</span>' +
+        action +
         '</div>';
     }).join('');
     if (managing) {
@@ -784,7 +839,34 @@ export class SyncPanel {
           renderCats();
         });
       });
+    } else {
+      listEl.querySelectorAll('[data-action="discover"]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          // the row itself toggles nothing outside manage mode, but keep the
+          // click from bubbling into future row handlers
+          e.stopPropagation();
+          vscode.postMessage({ type: 'discoverOpen' });
+        });
+      });
     }
+  }
+
+  /** Banner above the pulse card: how much is waiting to be synced. */
+  function renderChanges() {
+    const el = $('changes');
+    const c = current.changes;
+    if (!c || !c.count || current.status === 'syncing') {
+      el.classList.add('hidden');
+      return;
+    }
+    const parts = Object.entries(c.detail || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([cat, n]) => label(cat) + ' ' + n);
+    $('changesMsg').innerHTML = c.initial
+      ? '云端还没有同步内容 · 可先推送本机配置'
+      : '发现 <b>' + c.count + '</b> 项变更待同步';
+    el.title = parts.join(' · ');
+    el.classList.remove('hidden');
   }
 
   function setManaging(on) {
@@ -842,6 +924,7 @@ export class SyncPanel {
       default: text.textContent = '空闲'; pulse.classList.add('off'); trackLabel.textContent = '未连接';
     }
     renderCats();
+    renderChanges();
     if (managing) { /* keep edit mode visuals */ }
 
     // version button doubles as the check-update trigger
@@ -1271,7 +1354,7 @@ export class SyncPanel {
     }
   }
 
-  $('discoverBtn').addEventListener('click', () => vscode.postMessage({ type: 'discoverOpen' }));
+  $('changesSync').addEventListener('click', () => vscode.postMessage({ type: 'syncNow' }));
   $('discX').addEventListener('click', () => vscode.postMessage({ type: 'discoverClose' }));
   $('discCancel').addEventListener('click', () => {
     if (discPhase === 'form' || discPhase === 'done') {
